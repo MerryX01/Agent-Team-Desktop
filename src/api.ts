@@ -45,6 +45,7 @@ const mockApi = {
   agents: {
     list: async () => load('agents', DEFAULT_AGENTS),
     save: async (agent) => save('agents', [...load('agents', DEFAULT_AGENTS).filter((a) => a.id !== agent.id), agent]),
+    remove: async (id) => save('agents', load('agents', DEFAULT_AGENTS).filter((a) => a.id !== id)),
     detect: async () => ({ installed: false, detail: '浏览器预览模式：不会启动本机 CLI' }),
     detectAll: async () => ({ 'agent-trae': { installed: false, detail: '预览模式' } }),
     loginStatus: async () => ({ state: 'unknown', detail: '浏览器预览模式：不检查登录状态' })

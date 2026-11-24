@@ -17,6 +17,7 @@ import type { ElectronCredentialStore } from './credentials'
 export const IPC = {
   AGENTS_LIST: 'agents:list',
   AGENTS_SAVE: 'agents:save',
+  AGENTS_REMOVE: 'agents:remove',
   AGENTS_DETECT: 'agents:detect',
   AGENTS_LOGIN: 'agents:login',
   AGENTS_DETECT_ALL: 'agents:detectAll',
@@ -97,6 +98,11 @@ export function registerIpc(
   ipcMain.handle(IPC.AGENTS_SAVE, (_event, input: unknown) => {
     const agent = AgentDefinitionSchema.parse(input)
     store.insert('agents', agent)
+    return store.agents()
+  })
+  ipcMain.handle(IPC.AGENTS_REMOVE, (_event, agentId: string) => {
+    store.remove('agents', 'id', agentId)
+    for (const team of store.teams()) store.removeTeamMember(team.id, agentId)
     return store.agents()
   })
   ipcMain.handle(IPC.AGENTS_DETECT, async (_event, agentId: string) => registry.detect(agentId))

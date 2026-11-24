@@ -2,6 +2,8 @@
 import { computed, ref } from 'vue'
 import { useAppStore } from '../stores/app'
 import { api } from '../api'
+import RolePicker from '../components/RolePicker.vue'
+import { ROLE_CATALOG } from '@shared/index'
 import type { AgentDefinition } from '@shared/index'
 import { newId } from '@shared/index'
 
@@ -83,6 +85,12 @@ async function detectAll() {
   } finally { checking.value = false }
 }
 
+async function removeAgent(agent: AgentDefinition) {
+  if (!window.confirm(`确定删除成员「${agent.name}」？该操作同时从团队中移除该成员。`)) return
+  await store.removeAgent(agent.id)
+  if (selectedId.value === agent.id) { selectedId.value = null; draft.value = null }
+}
+
 async function addApiAgent() {
   const agent: AgentDefinition = {
     id: newId('agent'), name: '新 API 模型成员', kind: 'api-provider', vendor: 'Custom',
@@ -113,7 +121,7 @@ async function addApiAgent() {
     <div class="grid grid-cols-5 gap-4">
       <div class="panel col-span-3 overflow-hidden">
         <table class="table">
-          <thead><tr><th>Agent</th><th>来源</th><th>命令</th><th>状态</th><th></th></tr></thead>
+          <thead><tr><th>Agent</th><th>来源</th><th>命令</th><th>状态</th><th>操作</th></tr></thead>
           <tbody>
             <tr v-for="agent in store.agents" :key="agent.id" :class="selectedId === agent.id ? 'bg-indigo-50/60' : ''" @click="edit(agent)" class="cursor-pointer">
               <td>
@@ -131,7 +139,12 @@ async function addApiAgent() {
                 <span v-else-if="agent.installed" class="badge badge-native">已安装</span>
                 <span v-else class="badge badge-neutral">未安装</span>
               </td>
-              <td class="text-slate-300">›</td>
+              <td>
+                <div class="flex gap-2" @click.stop>
+                  <button class="text-[12px] text-indigo-600" @click="edit(agent)">编辑</button>
+                  <button class="text-[12px] text-slate-400 hover:text-rose-600" @click="removeAgent(agent)">删除</button>
+                </div>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -192,11 +205,11 @@ async function addApiAgent() {
         </template>
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="label">角色（可选预设或自定义）</label>
-            <input v-model="draft.role" class="input" list="agent-roles" placeholder="developer" />
-            <datalist id="agent-roles">
-              <option v-for="role in ['architect','reviewer','developer','qa','researcher','docs','auditor','optimizer','lead']" :key="role" :value="role"></option>
-            </datalist>
+            <label class="label">角色（可搜索预设或自定义）</label>
+            <RolePicker v-model="draft.role" />
+            <p class="text-[10px] text-slate-400 mt-1">
+              {{ ROLE_CATALOG.find((item) => item.value === draft!.role)?.description ?? '角色职责提示词会注入成员任务简报' }}
+            </p>
           </div>
           <div v-if="draft.kind === 'api-provider'">
             <label class="label">API Provider</label>

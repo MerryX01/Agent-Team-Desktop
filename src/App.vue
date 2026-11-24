@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted } from 'vue'
 import { useAppStore } from './stores/app'
+import { api } from './api'
 import { isPreviewMode } from './api'
 
 const store = useAppStore()
@@ -9,6 +10,12 @@ let unsubscribe: (() => void) | undefined
 onMounted(async () => {
   await store.refresh()
   unsubscribe = store.subscribeEvents()
+  try {
+    await api.agents.detectAll()
+    await store.refresh()
+  } catch {
+    // 检测失败不阻断界面；用户可在 Agent 管理页手动重试。
+  }
 })
 onUnmounted(() => unsubscribe?.())
 </script>

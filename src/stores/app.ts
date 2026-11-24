@@ -73,6 +73,11 @@ export const useAppStore = defineStore('app', {
     async saveAgent(agent: AgentDefinition) {
       this.agents = await api.agents.save(agent)
     },
+    async removeAgent(id: string) {
+      this.agents = await api.agents.remove(id)
+      this.notice = '成员已删除'
+      await this.refresh()
+    },
     async saveProvider(provider: Partial<ApiProvider>, apiKey?: string) {
       this.providers = await api.providers.save(provider, apiKey)
     },

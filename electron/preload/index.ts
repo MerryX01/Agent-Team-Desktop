@@ -14,6 +14,7 @@ const api = {
   agents: {
     list: () => invoke<AgentDefinition[]>('agents:list'),
     save: (agent: AgentDefinition) => invoke<AgentDefinition[]>('agents:save', agent),
+    remove: (id: string) => invoke<AgentDefinition[]>('agents:remove', id),
     detect: (id: string) => invoke<{ installed: boolean; version?: string; commandPath?: string; detail?: string }>('agents:detect', id),
     detectAll: () => invoke<Record<string, { installed: boolean; detail?: string; version?: string }>>('agents:detectAll'),
     loginStatus: (id: string) => invoke<{ state: string; detail: string }>('agents:login', id)

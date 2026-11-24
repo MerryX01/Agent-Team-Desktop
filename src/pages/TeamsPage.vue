@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useAppStore } from '../stores/app'
-import { defaultPermissionPolicy, newId } from '@shared/index'
+import { defaultPermissionPolicy, ROLE_CATALOG, newId } from '@shared/index'
+import RolePicker from '../components/RolePicker.vue'
 import type { Team } from '@shared/index'
 
 const store = useAppStore()
@@ -10,7 +11,7 @@ const draft = ref<Team>({
   permissionMode: 'ask', isolation: 'none', policy: defaultPermissionPolicy(),
   leadAgentId: '', reviewFlow: 'agent_approval', reviewFlowPrompt: '', defaultActionMode: 'do'
 })
-const selectedRoles = ref<Record<string, { role: string; workflow: string; canWrite: boolean }>>({})
+const selectedRoles = ref<Record<string, { role: string; workflow: string; canWrite: boolean; isolation: 'none' | 'worktree'; pinned: boolean }>>({})
 const denyPatternsText = ref('')
 
 const members = computed(() => store.members)
@@ -19,8 +20,8 @@ watch(() => store.currentTeamId, () => {
   const team = store.currentTeam
   if (team) {
     draft.value = JSON.parse(JSON.stringify(team)) as Team
-    const roles: Record<string, { role: string; workflow: string; canWrite: boolean }> = {}
-    for (const member of store.members) roles[member.agentId] = { role: member.role, workflow: member.workflow ?? '', canWrite: member.canWrite }
+    const roles: Record<string, { role: string; workflow: string; canWrite: boolean; isolation: 'none' | 'worktree'; pinned: boolean }> = {}
+    for (const member of store.members) roles[member.agentId] = { role: member.role, workflow: member.workflow ?? '', canWrite: member.canWrite, isolation: member.isolation ?? 'none', pinned: Boolean(member.pinned) }
     selectedRoles.value = roles
     denyPatternsText.value = (team.policy?.denyPatterns ?? []).join('\n')
   }
@@ -39,18 +40,40 @@ async function saveTeam() {
 
 async function saveMembers() {
   const list = Object.entries(selectedRoles.value).map(([agentId, value], index) => ({
-    teamId: store.currentTeamId, agentId, role: value.role, workflow: value.workflow ?? '', priority: index, canWrite: value.canWrite
+    teamId: store.currentTeamId, agentId, role: value.role, workflow: value.workflow ?? '', isolation: value.isolation, pinned: value.pinned, priority: index, canWrite: value.canWrite
   }))
   await store.setMembers(list)
 }
 
 function toggle(agentId: string, checked: boolean) {
-  if (checked) selectedRoles.value[agentId] = { role: 'developer', workflow: '', canWrite: false }
+  if (checked) selectedRoles.value[agentId] = { role: 'developer', workflow: '', canWrite: false, isolation: 'none', pinned: false }
   else delete selectedRoles.value[agentId]
 }
 
 function setRole(agentId: string, role: string) {
   if (selectedRoles.value[agentId]) selectedRoles.value[agentId].role = role
+}
+
+function memberModel(agent: { kind: string; providerRef?: string; command?: string }): string {
+  if (agent.kind === 'api-provider') {
+    return store.providers.find((provider) => provider.id === agent.providerRef)?.model ?? 'API 模型'
+  }
+  return agent.command || '本机 CLI'
+}
+
+function copyMember(agentId: string) {
+  const role = selectedRoles.value[agentId]
+  if (!role) return
+  void navigator.clipboard?.writeText(JSON.stringify({ agentId, ...role }, null, 2))
+  store.notice = '成员配置已复制'
+}
+
+async function removeMember(agentId: string) {
+  delete selectedRoles.value[agentId]
+  await store.setMembers(Object.entries(selectedRoles.value).map(([id, value], index) => ({
+    teamId: store.currentTeamId, agentId: id, role: value.role, workflow: value.workflow,
+    isolation: value.isolation, pinned: value.pinned, priority: index, canWrite: value.canWrite
+  })))
 }
 </script>
 
@@ -154,33 +177,47 @@ function setRole(agentId: string, role: string) {
           <button class="btn btn-primary !py-1.5" @click="saveMembers">保存成员</button>
         </div>
         <table class="table">
-          <thead><tr><th></th><th>成员</th><th>接入方式</th><th>角色（预设/自定义）</th><th>工作流指令</th><th>可写文件</th></tr></thead>
+          <thead><tr><th></th><th>成员</th><th>接入方式 / 模型</th><th>角色（搜索/自定义）</th><th>工作流指令</th><th>工作树</th><th>固定</th><th>操作</th></tr></thead>
           <tbody>
             <tr v-for="agent in store.agents" :key="agent.id">
               <td>
                 <input type="checkbox" :checked="Boolean(selectedRoles[agent.id])" @change="toggle(agent.id, ($event.target as HTMLInputElement).checked)" />
               </td>
               <td>
-                <div class="font-medium">{{ agent.name }}</div>
-                <div class="text-[11px] text-slate-400">{{ agent.role }}</div>
+                <div class="flex items-center gap-2">
+                  <span class="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center text-[13px]">{{ agent.name.slice(0, 1) }}</span>
+                  <div>
+                    <div class="font-medium">{{ agent.name }}</div>
+                    <div class="text-[11px] text-slate-400">{{ agent.installed ? '已安装' : '未安装' }} · {{ agent.role }}</div>
+                  </div>
+                </div>
               </td>
               <td>
                 <span v-if="agent.authMode === 'native-login'" class="badge badge-native">本机账号</span>
                 <span v-else-if="agent.authMode === 'api-key'" class="badge badge-api">API Key</span>
                 <span v-else class="badge badge-warn">待验证</span>
+                <div class="text-[11px] text-slate-400 mono truncate max-w-40">{{ memberModel(agent) }}</div>
               </td>
               <td>
-                <input v-if="selectedRoles[agent.id]" v-model="selectedRoles[agent.id].role" class="input !py-1" list="team-roles" placeholder="developer" />
-                <datalist id="team-roles">
-                  <option v-for="role in ['architect','reviewer','developer','qa','researcher','docs','auditor','optimizer','lead']" :key="role" :value="role"></option>
-                </datalist>
+                <RolePicker v-if="selectedRoles[agent.id]" v-model="selectedRoles[agent.id].role" compact />
               </td>
               <td>
                 <input v-if="selectedRoles[agent.id]" v-model="selectedRoles[agent.id].workflow" class="input !py-1" placeholder="可选角色指令" />
                 <span v-else class="text-slate-300">—</span>
               </td>
               <td>
-                <input v-if="selectedRoles[agent.id]" v-model="selectedRoles[agent.id].canWrite" type="checkbox" />
+                <input v-if="selectedRoles[agent.id]" v-model="selectedRoles[agent.id].isolation" type="checkbox" true-value="worktree" false-value="none" />
+                <span v-else class="text-slate-300">—</span>
+              </td>
+              <td>
+                <input v-if="selectedRoles[agent.id]" v-model="selectedRoles[agent.id].pinned" type="checkbox" />
+                <span v-else class="text-slate-300">—</span>
+              </td>
+              <td>
+                <div class="flex gap-2" v-if="selectedRoles[agent.id]">
+                  <button class="text-[12px] text-indigo-600" @click="copyMember(agent.id)">复制</button>
+                  <button class="text-[12px] text-slate-400 hover:text-rose-600" @click="removeMember(agent.id)">移除</button>
+                </div>
                 <span v-else class="text-slate-300">—</span>
               </td>
             </tr>

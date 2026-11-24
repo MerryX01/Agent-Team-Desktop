@@ -40,7 +40,8 @@ function fromRow<T>(row: Record<string, unknown> | undefined): T | undefined {
     } else if (key === 'data' || key === 'metadata' || key === 'policy') {
       try { result[key] = JSON.parse(String(value ?? '{}')) } catch { result[key] = {} }
     } else if (key === 'enabled' || key === 'verified' || key === 'canWrite' || key === 'approvalRequired' ||
-               key === 'headlessFallback' || key === 'usageSupported' || key === 'binary' || key === 'isLead') {
+               key === 'headlessFallback' || key === 'usageSupported' || key === 'binary' || key === 'isLead' ||
+               key === 'pinned' || key === 'installed') {
       result[key] = value === 1 || value === true
     } else {
       result[key] = value
@@ -77,8 +78,8 @@ export class SqliteStore {
         defaultWorkspace TEXT NOT NULL, maxConcurrency INTEGER NOT NULL, permissionMode TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS team_members (
-        teamId TEXT NOT NULL, agentId TEXT NOT NULL, role TEXT NOT NULL,
-        priority INTEGER NOT NULL, canWrite INTEGER NOT NULL,
+        teamId TEXT NOT NULL, agentId TEXT NOT NULL, role TEXT NOT NULL, workflow TEXT,
+        isolation TEXT, pinned INTEGER, priority INTEGER NOT NULL, canWrite INTEGER NOT NULL,
         PRIMARY KEY (teamId, agentId)
       );
       CREATE TABLE IF NOT EXISTS tasks (
@@ -166,6 +167,8 @@ export class SqliteStore {
     this.ensureColumn('agents', 'workflow', "TEXT NOT NULL DEFAULT ''")
     this.ensureColumn('agents', 'isLead', 'INTEGER NOT NULL DEFAULT 0')
     this.ensureColumn('team_members', 'workflow', "TEXT NOT NULL DEFAULT ''")
+    this.ensureColumn('team_members', 'isolation', "TEXT NOT NULL DEFAULT 'none'")
+    this.ensureColumn('team_members', 'pinned', 'INTEGER NOT NULL DEFAULT 0')
     this.ensureColumn('teams', 'leadAgentId', 'TEXT')
     this.ensureColumn('teams', 'reviewFlow', "TEXT NOT NULL DEFAULT 'agent_approval'")
     this.ensureColumn('teams', 'reviewFlowPrompt', "TEXT NOT NULL DEFAULT ''")
@@ -197,6 +200,9 @@ export class SqliteStore {
     }
     if (this.count('agents') === 0) {
       for (const agent of DEFAULT_AGENTS) this.insert('agents', agent)
+    } else {
+      const opencode = DEFAULT_AGENTS.find((agent) => agent.id === 'agent-opencode')
+      if (opencode && !this.get('agents', 'id', opencode.id)) this.insert('agents', opencode)
     }
     const allAgents = this.all<AgentDefinition>('agents')
     let leadId = allAgents.find((agent) => agent.isLead)?.id
@@ -288,6 +294,12 @@ export class SqliteStore {
   }
   approvals(): Approval[] { return this.all<Approval>('approvals') }
   teamMembers(teamId: string): TeamMember[] { return this.all<TeamMember>('team_members', 'teamId = ?', [teamId]) }
+  removeTeamMember(teamId: string, agentId: string): void {
+    this.db.prepare('DELETE FROM team_members WHERE teamId = ? AND agentId = ?').run(teamId, agentId)
+  }
+  hasTeamMember(teamId: string, agentId: string): boolean {
+    return Boolean(this.db.prepare('SELECT 1 FROM team_members WHERE teamId = ? AND agentId = ?').get(teamId, agentId))
+  }
   fileChanges(runId?: string, taskId?: string): FileChange[] {
     if (taskId) return this.all<FileChange>('file_changes', 'taskId = ? ORDER BY createdAt DESC', [taskId])
     if (runId) return this.all<FileChange>('file_changes', 'runId = ? ORDER BY createdAt DESC', [runId])

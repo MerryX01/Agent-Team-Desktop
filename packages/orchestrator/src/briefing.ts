@@ -1,6 +1,6 @@
 import type { SqliteStore } from '@storage/index'
 import type { AgentDefinition, AgentMessage, Task, Team } from '@shared/index'
-import { RESERVED_LEAD_ROLES } from '@shared/index'
+import { RESERVED_LEAD_ROLES, ROLE_CATALOG } from '@shared/index'
 import type { RolePreset } from '@shared/index'
 import { buildActionModeInstruction, resolveActionMode } from './actionMode'
 
@@ -11,16 +11,9 @@ const DEPENDENCY_LIMIT = 8
 const MEMORY_LIMIT = 3
 const MESSAGE_LIMIT = 4
 
-const ROLE_DUTIES: Partial<Record<RolePreset, string>> = {
-  architect: '负责架构设计与技术决策，输出方案、边界与关键取舍。',
-  reviewer: '负责审查结果与质量把关，指出问题与改进建议，不直接改动实现。',
-  developer: '负责实现功能与修复问题，在工作区内改动并遵守权限策略。',
-  qa: '负责验证与测试，给出可复现步骤、预期结果与结论。',
-  researcher: '负责调研与资料整理，输出结论及其依据。',
-  docs: '负责文档撰写与整理，保持表述清晰准确。',
-  auditor: '负责合规与风险审查，列出发现、依据与整改建议。',
-  optimizer: '负责性能与流程优化，给出可衡量的改进建议。'
-}
+const ROLE_DUTIES: Partial<Record<RolePreset, string>> = Object.fromEntries(
+  ROLE_CATALOG.map((item) => [item.value, item.duty])
+) as Partial<Record<RolePreset, string>>
 const LEAD_DUTY = '负责统筹协调、分派任务、跟进阻塞并汇总结论。'
 const GENERIC_DUTY = '请按任务描述完成职责范围内的工作，并及时汇报结果。'
 

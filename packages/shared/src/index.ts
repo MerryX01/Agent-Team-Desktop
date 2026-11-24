@@ -1,5 +1,16 @@
 import { z } from 'zod'
 
+export const ROLE_CATALOG = [
+  { value: 'architect', label: 'architect', icon: '🧩', description: '方案设计、边界与关键取舍', duty: '负责架构设计与技术决策，输出方案、边界与关键取舍。' },
+  { value: 'reviewer', label: 'reviewer', icon: '📖', description: '审查结果与质量把关', duty: '负责审查结果与质量把关，指出问题与改进建议，不直接改动实现。' },
+  { value: 'developer', label: 'developer', icon: '💻', description: '实现功能与修复问题', duty: '负责实现功能与修复问题，在工作区内改动并遵守权限策略。' },
+  { value: 'qa', label: 'qa', icon: '🐞', description: '验证、测试与复现步骤', duty: '负责验证与测试，给出可复现步骤、预期结果与结论。' },
+  { value: 'researcher', label: 'researcher', icon: '🔬', description: '调研与资料整理', duty: '负责调研与资料整理，输出结论及其依据。' },
+  { value: 'docs', label: 'docs', icon: '📄', description: '文档撰写与整理', duty: '负责文档撰写与整理，保持表述清晰准确。' },
+  { value: 'auditor', label: 'auditor', icon: '🛡️', description: '合规与风险审查', duty: '负责合规与风险审查，列出发现、依据与整改建议。' },
+  { value: 'optimizer', label: 'optimizer', icon: '⚡', description: '性能与流程优化', duty: '负责性能与流程优化，给出可衡量的改进建议。' }
+] as const
+
 export const ROLE_PRESETS = [
   'architect', 'reviewer', 'developer', 'qa', 'researcher', 'docs', 'auditor', 'optimizer'
 ] as const
@@ -166,6 +177,8 @@ export const TeamMemberSchema = z.object({
   agentId: z.string(),
   role: z.string().default('developer'),
   workflow: z.string().optional(),
+  isolation: z.enum(['none', 'worktree']).optional(),
+  pinned: z.boolean().optional(),
   priority: z.number().int().default(0),
   canWrite: z.boolean().default(false)
 })
@@ -308,6 +321,13 @@ export const DEFAULT_AGENTS: AgentDefinition[] = [
     id: 'agent-workbuddy', name: 'WorkBuddy', kind: 'remote-acp', vendor: 'Tencent',
     command: '', args: [], env: {}, headlessArgs: [], headlessFallback: false, usageSupported: false, workflow: '', isLead: false, enabled: false, authMode: 'unknown', role: 'researcher',
     installed: false, note: '待验证：桌面版本地 ACP 未确认；企业远程 ACP 不等于本机额度'
+  },
+  {
+    id: 'agent-opencode', name: 'OpenCode', kind: 'native-acp', vendor: 'OpenCode',
+    command: 'opencode', args: ['acp'], env: {}, headlessArgs: [], headlessFallback: false,
+    usageSupported: false, workflow: '', isLead: false, enabled: true,
+    authMode: 'native-login', role: 'developer', installed: false,
+    note: '官方 ACP 命令为 opencode acp；复用 OpenCode 已配置的 Provider 凭据，需 opencode auth login'
   }
 ]
 
