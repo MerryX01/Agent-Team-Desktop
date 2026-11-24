@@ -148,6 +148,7 @@ async function addApiAgent() {
               <td>
                 <span v-if="agent.kind === 'api-provider'" class="badge badge-api">已配置</span>
                 <span v-else-if="agent.installed" class="badge badge-native">已安装</span>
+                <span v-else-if="agent.desktopPath" class="badge badge-warn" :title="`检测到桌面客户端：${agent.desktopPath}\n但未找到可调用的 CLI/ACP 命令`">桌面端已装</span>
                 <span v-else class="badge badge-neutral">未安装</span>
               </td>
               <td>
@@ -236,6 +237,9 @@ async function addApiAgent() {
         <label class="text-[12px] text-slate-500 flex items-center gap-1">
           <input v-model="draft.isLead" type="checkbox" /> 保留为协调 Lead（姓名与角色不对外伪装）
         </label>
+        <div v-if="draft.desktopPath" class="rounded-lg bg-amber-50 border border-amber-200 p-3 text-[11px] text-amber-700 break-all">
+          检测到桌面客户端：{{ draft.desktopPath }}。桌面客户端不等于可调度 CLI；请安装对应官方 CLI / ACP 后重新检测。
+        </div>
         <div>
           <label class="label">说明 / 接入提示</label>
           <textarea v-model="draft.note" class="input" rows="2"></textarea>

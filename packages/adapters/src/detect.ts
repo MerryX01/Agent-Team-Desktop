@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { access } from 'node:fs/promises'
+import { access, readdir } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import type { AgentDefinition } from '@shared/index'
@@ -45,7 +45,35 @@ async function resolveCommandPath(command: string): Promise<string | undefined> 
   return result.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean)
 }
 
-/** 只调用官方 CLI 与系统 where.exe，不读取任何第三方私有凭据文件。 */
+const DESKTOP_APP_HINTS: Record<string, string[]> = {
+  traecli: ['Trae CN', 'Trae'],
+  qoder: ['Qoder CN', 'Qoder'],
+  qodercli: ['Qoder CN', 'Qoder'],
+  mcode: ['MiniMax Code', 'MiniMax'],
+  qwen: ['QianwenApp', 'Qwen Code', '通义']
+}
+
+/** 只读扫描常见安装目录，判断“桌面客户端已装”；这不等于 CLI/ACP 可用。 */
+export async function detectDesktopApp(command: string): Promise<string | undefined> {
+  const key = command.trim().toLowerCase()
+  const hints = DESKTOP_APP_HINTS[key]
+  if (!hints) return undefined
+  const roots = [
+    process.env.LOCALAPPDATA, process.env.APPDATA, process.env.PROGRAMFILES,
+    process.env['PROGRAMFILES(X86)'], 'D:\\SoftWare', 'D:\\Program Files'
+  ].filter((root): root is string => Boolean(root))
+  for (const root of roots) {
+    let entries: string[]
+    try { entries = await readdir(root) } catch { continue }
+    for (const hint of hints) {
+      const exact = entries.find((entry) => entry.toLowerCase() === hint.toLowerCase())
+      if (exact) return join(root, exact)
+    }
+  }
+  return undefined
+}
+
+import { join } from 'node:path'/** 只调用官方 CLI 与系统 where.exe，不读取任何第三方私有凭据文件。 */
 export async function detectAgent(definition: AgentDefinition): Promise<DetectionResult> {
   if (!definition.command) {
     return { installed: false, detail: '未配置命令；该 Agent 需实机确认公开接入方式' }

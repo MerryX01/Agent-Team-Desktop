@@ -66,7 +66,7 @@ export class SqliteStore {
         id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, vendor TEXT NOT NULL,
         command TEXT, args TEXT NOT NULL, statusArgs TEXT, cwd TEXT, env TEXT NOT NULL, enabled INTEGER NOT NULL,
         authMode TEXT NOT NULL, role TEXT NOT NULL, version TEXT, commandPath TEXT,
-        installed INTEGER NOT NULL, lastCheck TEXT, note TEXT, providerRef TEXT
+        installed INTEGER NOT NULL, lastCheck TEXT, note TEXT, providerRef TEXT, desktopPath TEXT
       );
       CREATE TABLE IF NOT EXISTS api_providers (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, protocol TEXT NOT NULL, baseUrl TEXT NOT NULL,
@@ -156,6 +156,7 @@ export class SqliteStore {
     this.ensureColumn('agents', 'remoteTokenRef', 'TEXT')
     this.ensureColumn('agents', 'customAdapterRef', 'TEXT')
     this.ensureColumn('agents', 'usageSupported', 'INTEGER NOT NULL DEFAULT 0')
+    this.ensureColumn('agents', 'desktopPath', 'TEXT')
     this.ensureColumn('teams', 'isolation', "TEXT NOT NULL DEFAULT 'none'")
     this.ensureColumn('teams', 'policy', "TEXT NOT NULL DEFAULT '{}'")
     this.ensureColumn('approvals', 'kind', "TEXT NOT NULL DEFAULT 'other'")

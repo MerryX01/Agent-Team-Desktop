@@ -53,6 +53,7 @@ export const AgentDefinitionSchema = z.object({
   isLead: z.boolean().optional(),
   version: z.string().optional(),
   commandPath: z.string().optional(),
+  desktopPath: z.string().optional(),
   installed: z.boolean().default(false),
   lastCheck: z.string().optional(),
   note: z.string().optional(),

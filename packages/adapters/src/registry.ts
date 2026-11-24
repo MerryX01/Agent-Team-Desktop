@@ -3,7 +3,7 @@ import type { AgentDefinition, AgentEvent, FileChange, PermissionPolicy } from '
 import { newId, nowIso } from '@shared/index'
 import { acpAdapter } from './acp'
 import { ApiProviderAdapter, MemoryCredentialStore, type CredentialStore } from './api-provider'
-import { checkLoginStatus, detectAgent } from './detect'
+import { checkLoginStatus, detectAgent, detectDesktopApp } from './detect'
 import { processAdapter } from './process'
 import { RemoteAcpAdapter } from './remote'
 import type { AgentAdapter, AgentSession, ApprovalDecision, ApprovalRequest, ConnectOptions, EventDraft, EventSink } from './types'
@@ -56,9 +56,11 @@ export class AdapterRegistry {
       : definition.kind === 'native-process'
         ? await this.adapterFor(definition).detect(definition)
         : await detectAgent(definition)
+    const desktopPath = result.installed ? undefined : await detectDesktopApp(definition.command ?? '')
     this.store.update('agents', 'id', agentId, {
       installed: result.installed,
       commandPath: result.commandPath,
+      desktopPath,
       version: result.version,
       lastCheck: nowIso(),
       note: result.detail ?? definition.note
