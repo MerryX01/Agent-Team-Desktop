@@ -11,12 +11,18 @@ export interface DetectionResult {
   detail?: string
 }
 
+/** Windows 下拼接 cmd.exe /c 命令行：无空格/元字符的路径与参数不包引号，避免 cmd 把引号当作命令名的一部分。 */
+export function buildCmdLine(command: string, args: string[]): string {
+  const quote = (value: string) => /[\s&|<>^"]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
+  return [quote(command), ...args.map(quote)].join(' ')
+}
+
 function runCaptured(command: string, args: string[], timeoutMs = 8000): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const onWindows = process.platform === 'win32'
     const isScript = onWindows && /\.(cmd|bat)$/i.test(command)
     const child = isScript
-      ? execFile('cmd.exe', ['/d', '/s', '/c', `"${command}" ${args.map((a) => `"${a}"`).join(' ')}`], { timeout: timeoutMs, windowsHide: true })
+      ? execFile('cmd.exe', ['/d', '/s', '/c', buildCmdLine(command, args)], { timeout: timeoutMs, windowsHide: true })
       : execFile(command, args, { timeout: timeoutMs, windowsHide: true })
     child.stdout?.setEncoding('utf8')
     child.stderr?.setEncoding('utf8')
@@ -48,7 +54,8 @@ export async function detectAgent(definition: AgentDefinition): Promise<Detectio
   if (!commandPath) {
     return { installed: false, detail: `未找到命令 ${definition.command}（可用 UI 指定绝对路径）` }
   }
-  const version = await runCaptured(definition.command, ['--version'])
+  // 使用 where.exe 解析出的绝对路径，保证 Windows .cmd/.bat 走 cmd.exe 包装。
+  const version = await runCaptured(commandPath, ['--version'])
   return {
     installed: true,
     commandPath,

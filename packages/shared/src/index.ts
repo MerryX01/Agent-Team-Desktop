@@ -328,6 +328,20 @@ export const DEFAULT_AGENTS: AgentDefinition[] = [
     usageSupported: false, workflow: '', isLead: false, enabled: true,
     authMode: 'native-login', role: 'developer', installed: false,
     note: '官方 ACP 命令为 opencode acp；复用 OpenCode 已配置的 Provider 凭据，需 opencode auth login'
+  },
+  {
+    id: 'agent-claude', name: 'Claude Code', kind: 'native-process', vendor: 'Anthropic',
+    command: 'claude', args: [], env: {}, headlessCommand: 'claude', headlessArgs: ['-p'],
+    headlessFallback: true, usageSupported: false, workflow: '', isLead: false,
+    enabled: true, authMode: 'native-login', role: 'developer', installed: false,
+    note: '使用官方 headless 命令 claude -p，复用 Claude Code 本机登录态；不声明 ACP'
+  },
+  {
+    id: 'agent-codex', name: 'Codex CLI', kind: 'native-process', vendor: 'OpenAI',
+    command: 'codex', args: [], env: {}, headlessCommand: 'codex', headlessArgs: ['exec'],
+    headlessFallback: true, usageSupported: false, workflow: '', isLead: false,
+    enabled: true, authMode: 'native-login', role: 'developer', installed: false,
+    note: '使用官方 headless 命令 codex exec，复用 Codex 本机登录态；不声明 ACP'
   }
 ]
 

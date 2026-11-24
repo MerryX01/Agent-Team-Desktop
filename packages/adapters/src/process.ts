@@ -3,7 +3,7 @@ import { existsSync, statSync } from 'node:fs'
 import type { Readable } from 'node:stream'
 import type { AgentDefinition } from '@shared/index'
 import { newId, nowIso } from '@shared/index'
-import { detectAgent } from './detect'
+import { buildCmdLine, detectAgent } from './detect'
 import type { AgentAdapter, AgentSession, ConnectOptions, EventDraft, EventSink } from './types'
 import { AdapterError } from './types'
 
@@ -26,16 +26,11 @@ interface LiveProcessSession extends AgentSession {
 
 const sessions = new Map<string, LiveProcessSession>()
 
-/** 把 Windows .cmd/.bat 的单个参数安全地引用起来，避免 & | > < 等被 cmd.exe 解释。 */
-function quoteCmdArg(value: string): string {
-  return `"${value.replace(/"/g, '""')}"`
-}
-
 function spawnProcess(command: string, args: string[], cwd: string, env: Record<string, string>): ChildProcessWithoutNullStreams {
   const fullEnv = { ...process.env, ...env }
   if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(command)) {
     // 仅对 .cmd/.bat 使用 cmd.exe；参数逐个引用后原样传递，不拼接用户字符串。
-    const cmdLine = [quoteCmdArg(command), ...args.map(quoteCmdArg)].join(' ')
+    const cmdLine = buildCmdLine(command, args)
     return spawn('cmd.exe', ['/d', '/s', '/c', cmdLine], {
       cwd, env: fullEnv, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe']
     }) as ChildProcessWithoutNullStreams

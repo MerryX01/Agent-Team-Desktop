@@ -201,8 +201,10 @@ export class SqliteStore {
     if (this.count('agents') === 0) {
       for (const agent of DEFAULT_AGENTS) this.insert('agents', agent)
     } else {
-      const opencode = DEFAULT_AGENTS.find((agent) => agent.id === 'agent-opencode')
-      if (opencode && !this.get('agents', 'id', opencode.id)) this.insert('agents', opencode)
+      for (const id of ['agent-opencode', 'agent-claude', 'agent-codex']) {
+        const builtIn = DEFAULT_AGENTS.find((agent) => agent.id === id)
+        if (builtIn && !this.get('agents', 'id', id)) this.insert('agents', builtIn)
+      }
     }
     const allAgents = this.all<AgentDefinition>('agents')
     let leadId = allAgents.find((agent) => agent.isLead)?.id

@@ -5,7 +5,7 @@ import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
 import type { AgentDefinition } from '@shared/index'
 import { defaultPermissionPolicy, newId, nowIso } from '@shared/index'
-import { checkLoginStatus, detectAgent } from './detect'
+import { buildCmdLine, checkLoginStatus, detectAgent } from './detect'
 import { diffSnapshots, ensurePathInWorkspace, readFileSafe, writeFileSafe } from './diff'
 import { evaluatePermission, type EvaluablePolicy, type PermissionKind, type PermissionRequest } from './policy'
 import type { AgentAdapter, AgentSession, ApprovalDecision, ConnectOptions, EventDraft } from './types'
@@ -28,7 +28,7 @@ function spawnAgent(definition: AgentDefinition, cwd: string): ChildProcessWitho
   const env = { ...process.env, ...(definition.env ?? {}) }
   const winScript = process.platform === 'win32' && /\.(cmd|bat)$/i.test(definition.command)
   const child = winScript
-    ? spawn('cmd.exe', ['/d', '/s', '/c', `"${definition.command}" ${args.map((a) => `"${a}"`).join(' ')}`], {
+    ? spawn('cmd.exe', ['/d', '/s', '/c', buildCmdLine(definition.command, args)], {
       cwd, env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe']
     })
     : spawn(definition.command, args, { cwd, env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
