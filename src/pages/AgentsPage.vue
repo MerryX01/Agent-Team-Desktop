@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useAppStore } from '../stores/app'
-import { api } from '../api'
+import { api, isPreviewMode } from '../api'
 import RolePicker from '../components/RolePicker.vue'
 import { ROLE_CATALOG } from '@shared/index'
 import type { AgentDefinition } from '@shared/index'
@@ -76,6 +76,10 @@ async function addCustomAgent() {
 }
 
 async function detectAll() {
+  if (isPreviewMode) {
+    statusText.value = '当前是浏览器预览模式：不会启动本机 CLI，检测始终显示未安装。请在桌面端（npm run dev 或已打包应用）点击批量检测。'
+    return
+  }
   checking.value = true
   try {
     const result = await api.agents.detectAll()
@@ -116,6 +120,13 @@ async function addApiAgent() {
         <button class="btn" @click="addCustomAgent">+ 自定义 CLI 成员</button>
         <button class="btn" @click="addApiAgent">+ API Key 成员</button>
       </div>
+    </div>
+
+    <div v-if="isPreviewMode" class="rounded-lg bg-amber-50 border border-amber-200 px-4 py-2 text-[12px] text-amber-700">
+      当前是浏览器预览模式，批量检测不会读取本机 CLI。请在桌面端运行应用后检测；本机已安装的 OpenCode 会在桌面端显示为已安装。
+    </div>
+    <div v-if="statusText && !isPreviewMode" class="rounded-lg bg-indigo-50 border border-indigo-200 px-4 py-2 text-[12px] text-indigo-700">
+      {{ statusText }}
     </div>
 
     <div class="grid grid-cols-5 gap-4">
@@ -234,7 +245,6 @@ async function addApiAgent() {
           <button v-if="draft.kind !== 'api-provider'" class="btn" :disabled="checking" @click="detect">检测命令</button>
           <button v-if="draft.authMode === 'native-login'" class="btn" :disabled="checking" @click="checkLogin">检查登录状态</button>
         </div>
-        <div v-if="statusText" class="rounded-lg bg-slate-50 border border-slate-200 p-3 text-[12px] text-slate-600 leading-relaxed">{{ statusText }}</div>
         <p class="text-[11px] text-slate-400 leading-relaxed">不复制第三方 Token；登录失效时请在原 CLI 登录。额度与订阅由原厂账号决定，平台不承诺免费。</p>
       </div>
     </div>
