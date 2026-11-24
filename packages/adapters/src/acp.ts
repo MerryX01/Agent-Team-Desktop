@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
 import type { AgentDefinition } from '@shared/index'
-import { defaultPermissionPolicy, newId, nowIso } from '@shared/index'
+import { defaultPermissionPolicy, modelById, newId, nowIso } from '@shared/index'
 import { buildCmdLine, checkLoginStatus, detectAgent } from './detect'
 import { diffSnapshots, ensurePathInWorkspace, readFileSafe, writeFileSafe } from './diff'
 import { evaluatePermission, type EvaluablePolicy, type PermissionKind, type PermissionRequest } from './policy'
@@ -306,6 +306,24 @@ export class AcpAdapter implements AgentAdapter {
       )
       onEvent({ type: 'system', agentId: definition.id, message: `ACP 连接成功，协议版本 ${init.protocolVersion}` })
       const active = await withTimeout(conn.agent.buildSession(cwd).start(), options.timeoutMs ?? 20000, 'ACP session/new')
+      // 尽力应用所选模型：ACP session/set_model 属于可选扩展，Agent 不支持时忽略，不影响主流程。
+      const selectedModel = modelById(definition.modelRef)
+      if (selectedModel) {
+        try {
+          await withTimeout(
+            conn.agent.request('session/set_model', { sessionId: active.sessionId, modelId: selectedModel.modelId }),
+            options.timeoutMs ?? 10000,
+            'ACP session/set_model'
+          )
+          onEvent({ type: 'system', agentId: definition.id, message: `已应用模型映射：${selectedModel.label}`, data: { modelRef: definition.modelRef } })
+        } catch (error) {
+          onEvent({
+            type: 'system', agentId: definition.id,
+            message: `模型映射未生效（工具可能不支持 session/set_model）：${selectedModel.label}`,
+            data: { modelRef: definition.modelRef, detail: error instanceof Error ? error.message : String(error) }
+          })
+        }
+      }
       const session: LiveSession = {
         id: newId('session'), agentId: definition.id, sessionId: active.sessionId, pid: child.pid,
         protocol: 'acp', status: 'online', cwd, startedAt: nowIso(), conn, active, child

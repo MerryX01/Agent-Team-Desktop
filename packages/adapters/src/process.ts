@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { existsSync, statSync } from 'node:fs'
 import type { Readable } from 'node:stream'
 import type { AgentDefinition } from '@shared/index'
-import { newId, nowIso } from '@shared/index'
+import { modelById, newId, nowIso } from '@shared/index'
 import { buildCmdLine, detectAgent } from './detect'
 import type { AgentAdapter, AgentSession, ConnectOptions, EventDraft, EventSink } from './types'
 import { AdapterError } from './types'
@@ -123,7 +123,12 @@ export class NativeProcessAdapter implements AgentAdapter {
     if (!cwd || !existsSync(cwd) || !statSync(cwd).isDirectory()) {
       throw new AdapterError(`工作目录不存在或不是目录: ${cwd}`, 'connect')
     }
-    const baseArgs = (useHeadless(definition) ? definition.headlessArgs : definition.args) ?? []
+    const baseArgs = [...((useHeadless(definition) ? definition.headlessArgs : definition.args) ?? [])]
+    // Claude Code / Codex 官方 headless 支持 --model；仅在未显式给出时按模型映射追加。
+    const selectedModel = modelById(definition.modelRef)
+    if (selectedModel && !baseArgs.includes('--model')) {
+      baseArgs.push('--model', selectedModel.modelId)
+    }
     const session: LiveProcessSession = {
       id: newId('session'), agentId: definition.id, protocol: 'stdio', status: 'online', cwd,
       startedAt: nowIso(), command, baseArgs: [...baseArgs],

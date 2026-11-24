@@ -3,8 +3,8 @@ import { computed, ref } from 'vue'
 import { useAppStore } from '../stores/app'
 import { api, isPreviewMode } from '../api'
 import RolePicker from '../components/RolePicker.vue'
-import { ROLE_CATALOG } from '@shared/index'
-import type { AgentDefinition } from '@shared/index'
+import { ROLE_CATALOG, MODEL_CATALOG, MODEL_TOOL_LABEL, modelRateText, modelToolForAgent, modelById } from '@shared/index'
+import type { AgentDefinition, ModelEntry } from '@shared/index'
 import { newId } from '@shared/index'
 
 const store = useAppStore()
@@ -18,6 +18,16 @@ const remoteTokenText = ref('')
 const checking = ref(false)
 
 const selected = computed(() => store.agents.find((a) => a.id === selectedId.value))
+
+/** 当前编辑成员可用的官方模型（按其内置 ID 映射工具过滤）。 */
+const availableModels = computed<ModelEntry[]>(() => {
+  if (!draft.value) return []
+  const entryTool = modelToolForAgent(draft.value.id)
+  if (entryTool) return MODEL_CATALOG.filter((item) => item.tool === entryTool)
+  // 自定义/API 成员不内置映射，仍允许选择目录条目作为记录。
+  return MODEL_CATALOG
+})
+const currentModel = computed(() => modelById(draft.value?.modelRef))
 
 function edit(agent: AgentDefinition) {
   selectedId.value = agent.id
@@ -215,6 +225,21 @@ async function addApiAgent() {
             <div><label class="label">Access Token（仅保存凭据引用）</label><input v-model="remoteTokenText" type="password" class="input mono" placeholder="留空表示沿用已保存凭据" /></div>
           </div>
         </template>
+        <div v-if="draft.kind !== 'remote-acp'" class="rounded-lg border border-slate-200 p-3 space-y-2">
+          <div class="text-[12px] font-semibold text-slate-600">模型映射（官方目录）</div>
+          <select :value="draft.modelRef ?? ''" class="input" @change="draft!.modelRef = ($event.target as HTMLSelectElement).value || undefined">
+            <option value="">跟随工具默认（不指定）</option>
+            <option v-for="entry in availableModels" :key="entry.id" :value="entry.id">
+              {{ MODEL_TOOL_LABEL[entry.tool] }} · {{ entry.label }} — {{ modelRateText(entry) }}{{ entry.free ? '（免费）' : '' }}
+            </option>
+          </select>
+          <div v-if="currentModel" class="text-[11px] text-slate-500 leading-relaxed">
+            <span class="mono">{{ currentModel.modelId }}</span>
+            <div>{{ currentModel.note }}</div>
+            <a :href="currentModel.source" target="_blank" rel="noreferrer" class="text-indigo-600 hover:underline">官方来源 ↗</a>
+          </div>
+          <div v-else class="text-[11px] text-slate-400">倍率/免费来自各工具官方文档；未公开的项目不会臆造。详细清单见「模型映射」页。</div>
+        </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="label">角色（可搜索预设或自定义）</label>

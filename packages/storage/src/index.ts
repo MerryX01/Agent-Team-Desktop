@@ -47,6 +47,11 @@ function fromRow<T>(row: Record<string, unknown> | undefined): T | undefined {
       result[key] = value
     }
   }
+  // SQLite 用 NULL 表示「未设置」，而 Zod schema 的可选字段要求 undefined 而非 null。
+  // 读取时丢弃 null，避免把 store 读出的数据原样传回 IPC 保存时校验失败。
+  for (const [key, value] of Object.entries(result)) {
+    if (value === null) delete result[key]
+  }
   return result as T
 }
 
@@ -157,6 +162,7 @@ export class SqliteStore {
     this.ensureColumn('agents', 'customAdapterRef', 'TEXT')
     this.ensureColumn('agents', 'usageSupported', 'INTEGER NOT NULL DEFAULT 0')
     this.ensureColumn('agents', 'desktopPath', 'TEXT')
+    this.ensureColumn('agents', 'modelRef', 'TEXT')
     this.ensureColumn('teams', 'isolation', "TEXT NOT NULL DEFAULT 'none'")
     this.ensureColumn('teams', 'policy', "TEXT NOT NULL DEFAULT '{}'")
     this.ensureColumn('approvals', 'kind', "TEXT NOT NULL DEFAULT 'other'")

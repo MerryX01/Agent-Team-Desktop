@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { access, readdir } from 'node:fs/promises'
 import { constants } from 'node:fs'
-import { isAbsolute } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import type { AgentDefinition } from '@shared/index'
 
 export interface DetectionResult {
@@ -41,8 +41,18 @@ async function resolveCommandPath(command: string): Promise<string | undefined> 
   }
   if (process.platform !== 'win32') return command || undefined
   const result = await runCaptured('where.exe', [command])
-  if (result.code !== 0) return undefined
-  return result.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean)
+  if (result.code === 0) {
+    const found = result.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean)
+    if (found) return found
+  }
+  const home = process.env.USERPROFILE
+  const fallback = command === 'qoder' || command === 'qodercli'
+    ? join(home ?? '', '.qoder', 'bin', 'qodercli', 'qodercli.exe')
+    : undefined
+  if (fallback) {
+    try { await access(fallback, constants.X_OK); return fallback } catch { /* ignore */ }
+  }
+  return undefined
 }
 
 const DESKTOP_APP_HINTS: Record<string, string[]> = {
@@ -73,7 +83,7 @@ export async function detectDesktopApp(command: string): Promise<string | undefi
   return undefined
 }
 
-import { join } from 'node:path'/** 只调用官方 CLI 与系统 where.exe，不读取任何第三方私有凭据文件。 */
+/** 只调用官方 CLI 与系统 where.exe，不读取任何第三方私有凭据文件。 */
 export async function detectAgent(definition: AgentDefinition): Promise<DetectionResult> {
   if (!definition.command) {
     return { installed: false, detail: '未配置命令；该 Agent 需实机确认公开接入方式' }
@@ -83,7 +93,7 @@ export async function detectAgent(definition: AgentDefinition): Promise<Detectio
     return { installed: false, detail: `未找到命令 ${definition.command}（可用 UI 指定绝对路径）` }
   }
   // 使用 where.exe 解析出的绝对路径，保证 Windows .cmd/.bat 走 cmd.exe 包装。
-  const version = await runCaptured(commandPath, ['--version'])
+  const version = await runCaptured(commandPath, ['--version'], 15000)
   return {
     installed: true,
     commandPath,

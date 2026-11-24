@@ -64,7 +64,9 @@ export const AgentDefinitionSchema = z.object({
   remoteUrl: z.string().optional(),
   remoteTokenRef: z.string().optional(),
   customAdapterRef: z.string().optional(),
-  usageSupported: z.boolean().default(false)
+  usageSupported: z.boolean().default(false),
+  /** 引用的模型目录条目 ID（MODEL_CATALOG[].id）。仅作配置记录，不冒充 CLI 运行时能力。 */
+  modelRef: z.string().optional()
 })
 export type AgentDefinition = z.infer<typeof AgentDefinitionSchema>
 
@@ -296,6 +298,150 @@ export const CustomAdapterSchema = z.object({
   note: z.string().optional()
 })
 export type CustomAdapter = z.infer<typeof CustomAdapterSchema>
+
+/**
+ * 模型映射目录（数据来源：各工具官方文档，采集于 2026-11-24）
+ *
+ * 重要口径说明：
+ * - 这里的「倍率」是各工具官方的「用量消耗倍率」，不是第三方中转站的加价倍率。
+ * - OpenCode Console：按官方刊例价（USD / 1M token）计费，免费模型标 free=true；无「倍率」概念，倍率记为 1（刊例价）或 0（免费）。
+ * - Trae：按官方刊例价（USD / 1M token）+ 套餐 Dollar Usage 额度计费；无「倍率」概念。
+ * - Qoder：官方文档明确「各模型消耗 Credits 的速度不同，以模型选择器中的显示为准」，并给出 Qwen3.8-Flash 限时 0.1x → 0.0x；其余模型官方未公开精确倍率，保持 null 并在 note 注明，严禁臆造。
+ * - Claude Code / Codex CLI：使用本机订阅登录态，模型消耗官方订阅/API 计费，工具本身不公开倍率。
+ * 因此本目录用 priceInput/priceOutput 承载官方刊例价，用 creditRate 承载官方明确给出的倍率，
+ * 用 free 标识官方限时/长期免费；未公开的一律留空，不猜测。
+ */
+export const ModelToolSchema = z.enum(['opencode', 'trae', 'qoder', 'claude-code', 'codex'])
+export type ModelTool = z.infer<typeof ModelToolSchema>
+
+export const MODEL_TOOL_LABEL: Record<ModelTool, string> = {
+  opencode: 'OpenCode',
+  trae: 'Trae',
+  qoder: 'Qoder',
+  'claude-code': 'Claude Code',
+  codex: 'Codex CLI'
+}
+
+/** 哪些内置 Agent ID 允许使用某工具的模型（用于 UI 过滤，不做运行时保证）。 */
+export const MODEL_TOOL_AGENTS: Record<ModelTool, string[]> = {
+  opencode: ['agent-opencode'],
+  trae: ['agent-trae'],
+  qoder: ['agent-qoder'],
+  'claude-code': ['agent-claude'],
+  codex: ['agent-codex']
+}
+
+export const ModelEntrySchema = z.object({
+  /** 目录内唯一 ID，如 opencode/qwen3.8-flash */
+  id: z.string(),
+  tool: ModelToolSchema,
+  /** 官方模型 ID（用于配置/展示，格式随工具而异） */
+  modelId: z.string(),
+  /** 展示名称 */
+  label: z.string(),
+  /** 模型家族/厂商，便于筛选 */
+  family: z.string().default(''),
+  /** 官方声明免费（限时免费也属于此列，note 会标注） */
+  free: z.boolean().default(false),
+  /** 官方刊例价：输入 USD / 1M token */
+  priceInput: z.number().min(0).optional(),
+  /** 官方刊例价：输出 USD / 1M token */
+  priceOutput: z.number().min(0).optional(),
+  /** 官方明确公布的 Credits 消耗倍率；未公开则为 undefined */
+  creditRate: z.number().min(0).optional(),
+  /** 倍率口径说明/风险提示 */
+  note: z.string().default(''),
+  /** 官方文档来源 URL */
+  source: z.string().default('')
+})
+export type ModelEntry = z.infer<typeof ModelEntrySchema>
+
+const SOURCE = {
+  opencode: 'https://opencode.ai/docs/console/models',
+  trae: 'https://docs.trae.ai/ide/models',
+  traeBilling: 'https://docs.trae.ai/ide/new-plans-and-billing',
+  qoder: 'https://qoder.com/zh/blog/qoder-lite',
+  qoderActivity: 'https://qoder.com/activities',
+  qoderPricing: 'https://qoder.com/pricing'
+} as const
+
+/** 官方限时/长期免费模型，以及常用的官方刊例价模型。仅收录官方文档明确列出的条目。 */
+export const MODEL_CATALOG: ModelEntry[] = [
+  // ---------------- OpenCode Console ----------------
+  { id: 'opencode/deepseek-v4.1-flash-free', tool: 'opencode', modelId: 'opencode/deepseek-v4.1-flash-free', label: 'DeepSeek V4.1 Flash Free', family: 'DeepSeek', free: true, note: '官方限时免费；零留存，不用于训练', source: SOURCE.opencode },
+  { id: 'opencode/mimo-v2.6-flash-free', tool: 'opencode', modelId: 'opencode/mimo-v2.6-flash-free', label: 'MiMo-V2.6-Flash Free', family: 'Xiaomi', free: true, note: '官方限时免费', source: SOURCE.opencode },
+  { id: 'opencode/nemotron-3.5-lightning-free', tool: 'opencode', modelId: 'opencode/nemotron-3.5-lightning-free', label: 'Nemotron 3.5 Lightning Free', family: 'NVIDIA', free: true, note: '官方限时免费；NVIDIA 免费端点仅供试用，勿提交敏感数据', source: SOURCE.opencode },
+  { id: 'opencode/nemotron-3.5-super-vl-free', tool: 'opencode', modelId: 'opencode/nemotron-3.5-super-vl-free', label: 'Nemotron 3.5 Super VL Free', family: 'NVIDIA', free: true, note: '官方限时免费；NVIDIA 免费端点仅供试用', source: SOURCE.opencode },
+  { id: 'opencode/big-pickle', tool: 'opencode', modelId: 'opencode/big-pickle', label: 'Big Pickle', family: 'Stealth', free: true, note: '官方限时免费；免费期数据可能用于改进模型', source: SOURCE.opencode },
+  { id: 'opencode/iceman-free', tool: 'opencode', modelId: 'opencode/iceman-free', label: 'Iceman Free', family: 'Stealth', free: true, note: '官方限时免费；免费期数据可能被留存并用于训练', source: SOURCE.opencode },
+  { id: 'opencode/beam-free', tool: 'opencode', modelId: 'opencode/beam-free', label: 'Beam Free', family: 'Stealth', free: true, note: '官方限时免费；部分国家/地区不可用（含中国大陆、港澳）', source: SOURCE.opencode },
+  { id: 'opencode/flint-40b-free', tool: 'opencode', modelId: 'opencode/flint-40b-free', label: 'Flint 40B Free', family: 'Stealth', free: true, note: '官方限时免费；数据留存 30 天', source: SOURCE.opencode },
+  { id: 'opencode/hy4-flash-free', tool: 'opencode', modelId: 'opencode/hy4-flash-free', label: 'Hy4 flash Free', family: 'Stealth', free: true, note: '官方限时免费；零留存', source: SOURCE.opencode },
+  { id: 'opencode/jev-1.13-free', tool: 'opencode', modelId: 'opencode/jev-1.13-free', label: 'Jev 1.13 Free', family: 'TypeSafe AI', free: true, note: '官方限时免费；System One 决策模型', source: SOURCE.opencode },
+  { id: 'opencode/qwen3.8-flash', tool: 'opencode', modelId: 'opencode/qwen3.8-flash', label: 'Qwen3.8 Flash', family: 'Alibaba', free: false, priceInput: 0.15, priceOutput: 0.47, note: '按官方刊例价 USD/1M；非免费', source: SOURCE.opencode },
+  { id: 'opencode/glm-5.3-flash', tool: 'opencode', modelId: 'opencode/glm-5.3-flash', label: 'GLM 5.3 Flash', family: 'Zhipu', free: false, priceInput: 0.15, priceOutput: 0.5, note: '按官方刊例价 USD/1M；非免费', source: SOURCE.opencode },
+  { id: 'opencode/minimax-m3', tool: 'opencode', modelId: 'opencode/minimax-m3', label: 'MiniMax M3', family: 'MiniMax', free: false, priceInput: 0.3, priceOutput: 1.2, note: '按官方刊例价 USD/1M', source: SOURCE.opencode },
+  { id: 'opencode/claude-sonnet-5-5', tool: 'opencode', modelId: 'opencode/claude-sonnet-5-5', label: 'Claude Sonnet 5.5', family: 'Anthropic', free: false, priceInput: 2, priceOutput: 10, note: '按官方刊例价 USD/1M', source: SOURCE.opencode },
+  { id: 'opencode/claude-opus-5-5', tool: 'opencode', modelId: 'opencode/claude-opus-5-5', label: 'Claude Opus 5.5', family: 'Anthropic', free: false, priceInput: 4, priceOutput: 20, note: '按官方刊例价 USD/1M', source: SOURCE.opencode },
+  { id: 'opencode/gpt-6-luna', tool: 'opencode', modelId: 'opencode/gpt-6-luna', label: 'GPT 6 Luna', family: 'OpenAI', free: false, priceInput: 0.1, priceOutput: 0.5, note: '按官方刊例价 USD/1M（≤272K）', source: SOURCE.opencode },
+  { id: 'opencode/gpt-6.2-sol', tool: 'opencode', modelId: 'opencode/gpt-6.2-sol', label: 'GPT 6.2 Sol', family: 'OpenAI', free: false, priceInput: 2, priceOutput: 10, note: '按官方刊例价 USD/1M（≤272K）', source: SOURCE.opencode },
+
+  // ---------------- Trae（内置模型，非美国地区刊例价） ----------------
+  { id: 'trae/seed-2.1-turbo', tool: 'trae', modelId: 'Seed-2.1-Turbo', label: 'Seed-2.1-Turbo', family: 'ByteDance', free: false, priceInput: 0.5, priceOutput: 2.5, note: '非美国地区刊例价 USD/1M；套餐按 Token 用量计费', source: SOURCE.trae },
+  { id: 'trae/gpt-6-luna', tool: 'trae', modelId: 'GPT-6-Luna', label: 'GPT-6-Luna', family: 'OpenAI', free: false, priceInput: 0.1, priceOutput: 0.5, note: '≤272K 刊例价 USD/1M', source: SOURCE.trae },
+  { id: 'trae/gpt-6.2-sol', tool: 'trae', modelId: 'GPT-6.2-Sol', label: 'GPT-6.2-Sol', family: 'OpenAI', free: false, priceInput: 2, priceOutput: 10, note: '≤272K 刊例价 USD/1M', source: SOURCE.trae },
+  { id: 'trae/gpt-5.2', tool: 'trae', modelId: 'gpt-5.2', label: 'GPT-5.2', family: 'OpenAI', free: false, priceInput: 1.75, priceOutput: 14, note: '刊例价 USD/1M；也是官方 Subagent 可用模型 ID', source: SOURCE.trae },
+  { id: 'trae/gpt-5.4', tool: 'trae', modelId: 'gpt-5.4', label: 'GPT-5.4', family: 'OpenAI', free: false, priceInput: 2.5, priceOutput: 15, note: '≤272K 刊例价 USD/1M；Subagent 可用模型 ID', source: SOURCE.trae },
+  { id: 'trae/gemini-3.1-pro', tool: 'trae', modelId: 'gemini-3.1-pro', label: 'Gemini-3.1-Pro-Preview', family: 'Google', free: false, priceInput: 2, priceOutput: 12, note: '≤200K 刊例价 USD/1M；Subagent 可用模型 ID', source: SOURCE.trae },
+  { id: 'trae/gemini-3-flash-solo', tool: 'trae', modelId: 'gemini-3-flash-solo', label: 'Gemini-3-Flash-Preview', family: 'Google', free: false, priceInput: 0.5, priceOutput: 3, note: '刊例价 USD/1M；Subagent 可用模型 ID', source: SOURCE.trae },
+  { id: 'trae/deepseek-v4.1-flash', tool: 'trae', modelId: 'DeepSeek-V4.1-Flash', label: 'DeepSeek-V4.1-Flash', family: 'DeepSeek', free: false, priceInput: 0.3, priceOutput: 1.2, note: '非高峰刊例价 USD/1M；高峰价翻倍', source: SOURCE.trae },
+  { id: 'trae/kimi-k2.5', tool: 'trae', modelId: 'kimi-k2.5', label: 'Kimi-K2.5', family: 'Moonshot', free: false, priceInput: 0.6, priceOutput: 3, note: '刊例价 USD/1M；Subagent 可用模型 ID', source: SOURCE.trae },
+  { id: 'trae/minimax-m3', tool: 'trae', modelId: 'minimax-m3', label: 'MiniMax-M3', family: 'MiniMax', free: false, priceInput: 0.6, priceOutput: 2.4, note: '≤200K 刊例价 USD/1M；Subagent 可用模型 ID', source: SOURCE.trae },
+  { id: 'trae/claude-sonnet-4.5', tool: 'trae', modelId: 'claude-sonnet-4.5', label: 'Claude Sonnet 4.5', family: 'Anthropic', free: false, note: '官方模型列表收录；价格以 Trae 产品内模型选择器为准', source: SOURCE.trae },
+
+  // ---------------- Qoder（Credits 倍率口径） ----------------
+  { id: 'qoder/qwen3.8-flash', tool: 'qoder', modelId: 'Qwen3.8-Flash', label: 'Qwen3.8-Flash', family: 'Alibaba', free: true, creditRate: 0, note: '官方限时免费：Credits 倍率由 0.1x 降为 0.0x（2026-09-18 起），以产品显示为准', source: SOURCE.qoderActivity },
+  { id: 'qoder/deepseek-v4.1-flash-1017', tool: 'qoder', modelId: 'DeepSeek-V4.1-Flash-1017', label: 'DeepSeek-V4.1-Flash-1017', family: 'DeepSeek', free: true, note: '官方标注「目前限时免费」；精确 Credits 倍率未公开，以模型选择器为准', source: SOURCE.qoder },
+  { id: 'qoder/efficient', tool: 'qoder', modelId: 'Efficient', label: 'Efficient（智能档位）', family: 'Qoder', free: true, note: '付费用户限时免费畅用；Free 套餐是否可用以产品显示为准', source: SOURCE.qoder },
+  { id: 'qoder/auto', tool: 'qoder', modelId: 'Auto', label: 'Auto（智能档位）', family: 'Qoder', free: false, note: '自动选择模型；Credits 倍率未公开，以模型选择器为准', source: SOURCE.qoder },
+  { id: 'qoder/glm-5.3-flash', tool: 'qoder', modelId: 'GLM-5.3-Flash', label: 'GLM-5.3-Flash', family: 'Zhipu', free: false, note: '官方未公开精确 Credits 倍率；以模型选择器显示为准', source: SOURCE.qoder },
+  { id: 'qoder/qwen3.8-max', tool: 'qoder', modelId: 'Qwen3.8-Max', label: 'Qwen3.8-Max', family: 'Alibaba', free: false, note: '旗舰模型；官方未公开精确 Credits 倍率', source: SOURCE.qoder },
+  { id: 'qoder/deepseek-v4-pro', tool: 'qoder', modelId: 'DeepSeek-V4-Pro', label: 'DeepSeek-V4-Pro', family: 'DeepSeek', free: false, note: '旗舰模型；官方未公开精确 Credits 倍率', source: SOURCE.qoder },
+  { id: 'qoder/kimi-k3', tool: 'qoder', modelId: 'Kimi-K3', label: 'Kimi-K3', family: 'Moonshot', free: false, note: '旗舰模型；官方未公开精确 Credits 倍率', source: SOURCE.qoder },
+  { id: 'qoder/minimax-m3', tool: 'qoder', modelId: 'MiniMax-M3', label: 'MiniMax-M3', family: 'MiniMax', free: false, note: '旗舰模型；官方未公开精确 Credits 倍率', source: SOURCE.qoder },
+
+  // ---------------- Claude Code（本机订阅登录态，官方 CLI --model） ----------------
+  { id: 'claude-code/opus', tool: 'claude-code', modelId: 'opus', label: 'Claude Opus（别名）', family: 'Anthropic', free: false, note: '官方 --model 别名，指向最新 Opus；走本机 Claude 订阅/API 计费，本工具不公开倍率', source: 'https://docs.anthropic.com/en/docs/claude-code' },
+  { id: 'claude-code/sonnet', tool: 'claude-code', modelId: 'sonnet', label: 'Claude Sonnet（别名）', family: 'Anthropic', free: false, note: '官方 --model 别名，指向最新 Sonnet；走本机订阅/API 计费', source: 'https://docs.anthropic.com/en/docs/claude-code' },
+  { id: 'claude-code/claude-fable-5', tool: 'claude-code', modelId: 'claude-fable-5', label: 'Claude Fable 5', family: 'Anthropic', free: false, note: '官方 --model 完整模型名示例；计费由 Anthropic 官方决定', source: 'https://docs.anthropic.com/en/docs/claude-code' },
+
+  // ---------------- Codex CLI（本机订阅登录态） ----------------
+  { id: 'codex/gpt-5.1-codex', tool: 'codex', modelId: 'gpt-5.1-codex', label: 'GPT 5.1 Codex', family: 'OpenAI', free: false, note: 'OpenAI 官方模型；走本机 Codex 订阅/API 计费，本工具不公开倍率', source: 'https://developers.openai.com/codex' },
+  { id: 'codex/gpt-5.1-codex-max', tool: 'codex', modelId: 'gpt-5.1-codex-max', label: 'GPT 5.1 Codex Max', family: 'OpenAI', free: false, note: 'OpenAI 官方模型；订阅/API 计费', source: 'https://developers.openai.com/codex' },
+  { id: 'codex/gpt-5.1-codex-mini', tool: 'codex', modelId: 'gpt-5.1-codex-mini', label: 'GPT 5.1 Codex Mini', family: 'OpenAI', free: false, note: 'OpenAI 官方模型；订阅/API 计费', source: 'https://developers.openai.com/codex' }
+]
+
+export function modelById(id?: string): ModelEntry | undefined {
+  if (!id) return undefined
+  return MODEL_CATALOG.find((item) => item.id === id)
+}
+
+/** 按 Agent 内置 ID 推断其可用的模型工具；自定义/API 成员返回 undefined（由用户自行填写）。 */
+export function modelToolForAgent(agentId?: string): ModelTool | undefined {
+  if (!agentId) return undefined
+  const found = (Object.keys(MODEL_TOOL_AGENTS) as ModelTool[]).find((tool) => MODEL_TOOL_AGENTS[tool].includes(agentId))
+  return found
+}
+
+/** 模型倍率展示文案：区分「免费 / 官方Credits倍率 / 官方刊例价 / 未公开」。 */
+export function modelRateText(entry: ModelEntry): string {
+  if (entry.free) return entry.creditRate === 0 ? '0x（官方免费）' : '免费（官方限时）'
+  if (entry.creditRate !== undefined) return `${entry.creditRate}x`
+  if (entry.priceInput !== undefined && entry.priceOutput !== undefined) {
+    return `$${entry.priceInput}/$${entry.priceOutput} 每 1M`
+  }
+  return '官方未公开'
+}
 
 export const DEFAULT_AGENTS: AgentDefinition[] = [
   {

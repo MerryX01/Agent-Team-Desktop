@@ -35,6 +35,7 @@ onUnmounted(() => unsubscribe?.())
           { to: '/tasks', label: '任务执行', icon: '▶' },
           { to: '/agents', label: 'Agent 管理', icon: '◈' },
           { to: '/providers', label: 'API 模型', icon: '◇' },
+          { to: '/models', label: '模型映射', icon: '◫' },
           { to: '/settings', label: '设置', icon: '⚙' }
         ]" :key="item.to" :to="item.to"
           class="flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] text-slate-600 hover:bg-slate-100"
