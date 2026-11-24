@@ -30,10 +30,11 @@ onUnmounted(() => unsubscribe?.())
       <nav class="p-3 space-y-1 flex-1">
         <RouterLink v-for="item in [
           { to: '/', label: '工作台', icon: '⌂' },
+          { to: '/chat', label: '群聊', icon: '💬' },
+          { to: '/teams', label: '建群与成员', icon: '👥' },
+          { to: '/tasks', label: '任务执行', icon: '▶' },
           { to: '/agents', label: 'Agent 管理', icon: '◈' },
           { to: '/providers', label: 'API 模型', icon: '◇' },
-          { to: '/teams', label: '团队编排', icon: '▤' },
-          { to: '/tasks', label: '任务执行', icon: '▶' },
           { to: '/settings', label: '设置', icon: '⚙' }
         ]" :key="item.to" :to="item.to"
           class="flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] text-slate-600 hover:bg-slate-100"
@@ -50,7 +51,7 @@ onUnmounted(() => unsubscribe?.())
     <main class="flex-1 min-w-0 flex flex-col">
       <header class="h-14 shrink-0 bg-white border-b border-slate-200 px-6 flex items-center justify-between">
         <div class="flex items-center gap-3">
-          <span class="text-[13px] text-slate-500">当前团队</span>
+          <span class="text-[13px] text-slate-500">当前群聊</span>
           <select v-model="store.currentTeamId" class="input !w-52" @change="store.refresh()">
             <option v-for="team in store.teams" :key="team.id" :value="team.id">{{ team.name }}</option>
           </select>

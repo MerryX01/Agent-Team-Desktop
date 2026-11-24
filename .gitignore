@@ -57,3 +57,6 @@ playwright-report/
 
 # WorkBuddy 会话数据（非项目源码）
 .workbuddy/
+
+# 本地验证截图
+preview-*.png

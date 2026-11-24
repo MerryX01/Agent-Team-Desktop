@@ -1,4 +1,4 @@
-import { ipcMain, type WebContents } from 'electron'
+import { ipcMain, dialog, type WebContents } from 'electron'
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SqliteStore } from '@storage/index'
@@ -22,6 +22,7 @@ export const IPC = {
   AGENTS_LOGIN: 'agents:login',
   AGENTS_DETECT_ALL: 'agents:detectAll',
   PATH_REFRESH: 'system:refreshPath',
+  PICK_FOLDER: 'system:pickFolder',
   CREDENTIALS_SET: 'credentials:set',
   PROVIDERS_MODELS: 'providers:models',
   PROVIDERS_LIST: 'providers:list',
@@ -116,6 +117,10 @@ export function registerIpc(
     return results
   })
   ipcMain.handle(IPC.PATH_REFRESH, async () => ({ count: (await refreshPath()).length }))
+  ipcMain.handle(IPC.PICK_FOLDER, async () => {
+    const result = await dialog.showOpenDialog({ properties: ['openDirectory'], title: '选择群聊项目文件夹' })
+    return result.canceled || !result.filePaths.length ? '' : result.filePaths[0]
+  })
   ipcMain.handle(IPC.CREDENTIALS_SET, (_event, input: { ref?: string; secret: string }) => {
     const ref = input.ref || newId('cred')
     credentials.set(ref, input.secret)

@@ -167,7 +167,8 @@ const mockApi = {
     remove: async (id) => { save('customAdapters', load<CustomAdapter[]>('customAdapters', []).filter((a) => a.id !== id)); return true }
   },
   system: {
-    refreshPath: async () => ({ count: 0 })
+    refreshPath: async () => ({ count: 0 }),
+    pickFolder: async () => window.prompt('浏览器预览模式：请输入项目文件夹路径') ?? ''
   },
   credentials: {
     set: async (_secret, ref) => ref ?? newId('cred')

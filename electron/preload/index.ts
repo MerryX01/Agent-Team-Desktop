@@ -81,7 +81,8 @@ const api = {
     remove: (id: string) => invoke<boolean>('customAdapters:remove', id)
   },
   system: {
-    refreshPath: () => invoke<{ count: number }>('system:refreshPath')
+    refreshPath: () => invoke<{ count: number }>('system:refreshPath'),
+    pickFolder: () => invoke<string>('system:pickFolder')
   },
   credentials: {
     set: (secret: string, ref?: string) => invoke<string>('credentials:set', { ref, secret })
