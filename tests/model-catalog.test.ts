@@ -47,6 +47,37 @@ describe('模型映射目录（官方口径）', () => {
     expect(priced.free).toBe(false)
   })
 
+  it('Trae 只收中国版积分倍率口径，不混入国际版刊列价', () => {
+    const trae = MODEL_CATALOG.filter((item) => item.tool === 'trae')
+    expect(trae.length).toBeGreaterThanOrEqual(9)
+    for (const entry of trae) {
+      // CN 版按「积分 × 消耗速度倍率」计费，不存在 USD 刊列价
+      expect(entry.priceInput).toBeUndefined()
+      expect(entry.priceOutput).toBeUndefined()
+      expect(entry.source).toContain('trae.cn')
+    }
+    // IDE 模型选择器实测可核对的 9 个模型必须全部在列
+    for (const label of [
+      'Seed-2.1-Turbo', 'Seed-2.1-Pro-0915', 'Seed-Evolving', 'Seed-Code',
+      'GLM-5.4', 'GLM-5.3-Flash', 'GLM-5.3-FlashX', 'GLM-5.3', 'DeepSeek-V4.1-Flash'
+    ]) {
+      expect(trae.some((item) => item.label === label)).toBe(true)
+    }
+    // 国际版（docs.trae.ai）独有模型不得混入
+    for (const label of ['GPT-6-Luna', 'GPT-6.2-Sol', 'GPT-5.2', 'GPT-5.4', 'Gemini-3.1-Pro-Preview', 'Gemini-3-Flash-Preview']) {
+      expect(trae.some((item) => item.label === label)).toBe(false)
+    }
+    // 记基准倍率 + 折扣规则，而不是某一次截图里的即时值
+    const turbo = modelById('trae/seed-2.1-turbo')!
+    expect(turbo.creditRate).toBe(0.4)
+    expect(turbo.note).toContain('0.20x')
+    expect(modelRateText(turbo)).toBe('0.4x 基准')
+    // 套餐锁定且官方未公开倍率的，不得臆造数字
+    const glm54 = modelById('trae/glm-5.4')!
+    expect(glm54.creditRate).toBeUndefined()
+    expect(modelRateText(glm54)).toBe('官方未公开')
+  })
+
   it('自定义/API Agent 不映射到内置工具', () => {
     expect(modelToolForAgent('custom-1')).toBeUndefined()
     expect(modelToolForAgent(undefined)).toBeUndefined()

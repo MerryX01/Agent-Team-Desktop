@@ -36,6 +36,12 @@ export type AgentKind = z.infer<typeof AgentKindSchema>
 export const AuthModeSchema = z.enum(['native-login', 'api-key', 'remote-token', 'unknown'])
 export type AuthMode = z.infer<typeof AuthModeSchema>
 
+/** Agent 真实应答体检状态：只有 ready 才会被群聊调度。 */
+export const AgentHealthSchema = z.enum([
+  'unknown', 'ready', 'no-quota', 'login-required', 'not-installed', 'timeout', 'error', 'skipped'
+])
+export type AgentHealth = z.infer<typeof AgentHealthSchema>
+
 export const AgentDefinitionSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -66,17 +72,28 @@ export const AgentDefinitionSchema = z.object({
   customAdapterRef: z.string().optional(),
   usageSupported: z.boolean().default(false),
   /** 引用的模型目录条目 ID（MODEL_CATALOG[].id）。仅作配置记录，不冒充 CLI 运行时能力。 */
-  modelRef: z.string().optional()
+  modelRef: z.string().optional(),
+  /** 最近一次真实应答体检的结论；unknown/缺省表示尚未体检。 */
+  health: AgentHealthSchema.optional(),
+  /** 体检结论的原始依据（错误信息或回复摘要），用于排查“为什么不回复”。 */
+  healthDetail: z.string().optional(),
+  /** 体检往返耗时（毫秒）。 */
+  latencyMs: z.number().int().min(0).optional(),
+  /** 最近一次体检时间（ISO）。 */
+  lastProbeAt: z.string().optional()
 })
 export type AgentDefinition = z.infer<typeof AgentDefinitionSchema>
 
 export const AgentEventTypeSchema = z.enum([
-  'agent.started', 'agent.message.delta', 'agent.tool.started', 'agent.tool.finished',
+  'agent.started', 'agent.message.delta', 'agent.thought.delta', 'agent.tool.started', 'agent.tool.finished',
   'agent.permission.required', 'agent.completed', 'agent.failed', 'agent.cancelled',
   'task.started', 'task.completed', 'task.failed', 'run.started', 'run.completed',
   'file.changed', 'policy.denied', 'memory.saved', 'usage.updated',
   'review.requested', 'review.started', 'review.approved', 'review.changes_requested',
-  'review.lead_signoff', 'review.human_approved', 'message.sent', 'plan.generated', 'system'
+  'review.lead_signoff', 'review.human_approved', 'message.sent', 'plan.generated', 'system',
+  'chat.dispatch.started', 'chat.agent.started', 'chat.agent.delta', 'chat.agent.thought',
+  'chat.agent.tool', 'chat.agent.handoff', 'chat.agent.completed', 'chat.agent.failed',
+  'chat.agent.skipped', 'chat.dispatch.completed', 'probe.started', 'probe.completed'
 ])
 export type AgentEventType = z.infer<typeof AgentEventTypeSchema>
 
@@ -231,11 +248,72 @@ export const AgentMessageSchema = z.object({
   sender: z.string().default('system'),
   content: z.string(),
   summary: z.string().default(''),
-  kind: z.enum(['task_assignment', 'review_request', 'coordination', 'report', 'dependency_notice', 'user']).default('coordination'),
+  kind: z.enum(['task_assignment', 'review_request', 'coordination', 'report', 'dependency_notice', 'deliverable', 'user']).default('coordination'),
   createdAt: z.string(),
   readAt: z.string().optional()
 })
 export type AgentMessage = z.infer<typeof AgentMessageSchema>
+
+/** 一次真实应答体检的结果：证明 Agent 到底是“可用”，还是“没额度/没登录/没装”。 */
+export const AgentProbeResultSchema = z.object({
+  agentId: z.string(),
+  agentName: z.string(),
+  vendor: z.string().default(''),
+  role: z.string().default(''),
+  state: AgentHealthSchema,
+  latencyMs: z.number().int().min(0).default(0),
+  reply: z.string().default(''),
+  detail: z.string().default(''),
+  checkedAt: z.string()
+})
+export type AgentProbeResult = z.infer<typeof AgentProbeResultSchema>
+
+/** 群聊协同参与者：replied 才有发言，skipped 表示没额度/没装/没登录被跳过。 */
+export const ChatParticipantSchema = z.object({
+  agentId: z.string(),
+  name: z.string(),
+  role: z.string().default('developer'),
+  status: z.enum(['pending', 'replying', 'replied', 'failed', 'skipped']).default('pending'),
+  messageId: z.string().optional(),
+  reply: z.string().default(''),
+  error: z.string().default(''),
+  skipReason: z.string().default(''),
+  latencyMs: z.number().int().min(0).default(0)
+})
+export type ChatParticipant = z.infer<typeof ChatParticipantSchema>
+
+export const ChatGateCheckSchema = z.object({
+  key: z.string(),
+  label: z.string(),
+  ok: z.boolean(),
+  detail: z.string().default('')
+})
+export type ChatGateCheck = z.infer<typeof ChatGateCheckSchema>
+
+/**
+ * 一次群聊协同的完整记录。status=completed 且 gate.passed=true 才允许交付；
+ * 其余情况必须在界面显示「未完成 · 禁止交付」及阻塞原因。
+ */
+export const ChatRunSchema = z.object({
+  id: z.string(),
+  runId: z.string(),
+  teamId: z.string(),
+  content: z.string(),
+  status: z.enum(['running', 'completed', 'partial', 'failed']).default('running'),
+  participants: z.array(ChatParticipantSchema).default([]),
+  deliverable: z.string().default(''),
+  deliverableAgentId: z.string().optional(),
+  deliverableMessageId: z.string().optional(),
+  gate: z.object({
+    passed: z.boolean().default(false),
+    reasons: z.array(z.string()).default([]),
+    checks: z.array(ChatGateCheckSchema).default([])
+  }).default({ passed: false, reasons: [], checks: [] }),
+  durationMs: z.number().int().min(0).default(0),
+  createdAt: z.string(),
+  completedAt: z.string().optional()
+})
+export type ChatRun = z.infer<typeof ChatRunSchema>
 
 export const FileChangeSchema = z.object({
   id: z.string(),
@@ -305,13 +383,20 @@ export type CustomAdapter = z.infer<typeof CustomAdapterSchema>
  * 重要口径说明：
  * - 这里的「倍率」是各工具官方的「用量消耗倍率」，不是第三方中转站的加价倍率。
  * - OpenCode Console：按官方刊例价（USD / 1M token）计费，免费模型标 free=true；无「倍率」概念，倍率记为 1（刊例价）或 0（免费）。
- * - Trae：按官方刊例价（USD / 1M token）+ 套餐 Dollar Usage 额度计费；无「倍率」概念。
+ * - Trae：**只收中国版（Trae CN）**。CN 版按「积分 × 模型消耗速度倍率」计费，官方不公布 USD 刊例价、也不公布积分单价，
+ *   与国际版（docs.trae.ai 的 Dollar Usage 刊列价）**不存在换算关系**，故本目录不混列国际版条目。
+ *   creditRate 统一记「折扣前基准倍率」，折扣规则写进 note：Seed 系列免费用户 5 折 / 付费会员 2.5 折、
+ *   DeepSeek 系 22:00–次日 8:00 闲时自动 5 折、GLM 系列限时活动折。
+ *   任何单一数字都会随账号身份与时段变化，**以 IDE 模型选择器实时显示为准**。
  * - Qoder：官方文档明确「各模型消耗 Credits 的速度不同，以模型选择器中的显示为准」，并给出 Qwen3.8-Flash 限时 0.1x → 0.0x；其余模型官方未公开精确倍率，保持 null 并在 note 注明，严禁臆造。
  * - Claude Code / Codex CLI：使用本机订阅登录态，模型消耗官方订阅/API 计费，工具本身不公开倍率。
+ * - 豆包 CLI：官方 @bytedance/doubao-cli 支持 `doubao -p "任务"` 与 `--model <ID或名称>`，可用模型需先登录
+ *   后由 `doubao model list` 给出；官方未公布刊例价/倍率。因未经登录无法核实具体模型 ID，本目录不预置豆包条目，
+ *   避免臆造；process Adapter 对 doubao 会在配置 modelRef 时追加 --model。
  * 因此本目录用 priceInput/priceOutput 承载官方刊例价，用 creditRate 承载官方明确给出的倍率，
  * 用 free 标识官方限时/长期免费；未公开的一律留空，不猜测。
  */
-export const ModelToolSchema = z.enum(['opencode', 'trae', 'qoder', 'claude-code', 'codex'])
+export const ModelToolSchema = z.enum(['opencode', 'trae', 'qoder', 'claude-code', 'codex', 'doubao'])
 export type ModelTool = z.infer<typeof ModelToolSchema>
 
 export const MODEL_TOOL_LABEL: Record<ModelTool, string> = {
@@ -319,7 +404,8 @@ export const MODEL_TOOL_LABEL: Record<ModelTool, string> = {
   trae: 'Trae',
   qoder: 'Qoder',
   'claude-code': 'Claude Code',
-  codex: 'Codex CLI'
+  codex: 'Codex CLI',
+  doubao: '豆包 CLI'
 }
 
 /** 哪些内置 Agent ID 允许使用某工具的模型（用于 UI 过滤，不做运行时保证）。 */
@@ -328,7 +414,8 @@ export const MODEL_TOOL_AGENTS: Record<ModelTool, string[]> = {
   trae: ['agent-trae'],
   qoder: ['agent-qoder'],
   'claude-code': ['agent-claude'],
-  codex: ['agent-codex']
+  codex: ['agent-codex'],
+  doubao: ['agent-doubao']
 }
 
 export const ModelEntrySchema = z.object({
@@ -358,8 +445,8 @@ export type ModelEntry = z.infer<typeof ModelEntrySchema>
 
 const SOURCE = {
   opencode: 'https://opencode.ai/docs/console/models',
-  trae: 'https://docs.trae.ai/ide/models',
-  traeBilling: 'https://docs.trae.ai/ide/new-plans-and-billing',
+  trae: 'https://docs.trae.cn/ide_limited-time-discount-for-builtin-models',
+  traePricing: 'https://www.trae.cn/pricing',
   qoder: 'https://qoder.com/zh/blog/qoder-lite',
   qoderActivity: 'https://qoder.com/activities',
   qoderPricing: 'https://qoder.com/pricing'
@@ -386,18 +473,18 @@ export const MODEL_CATALOG: ModelEntry[] = [
   { id: 'opencode/gpt-6-luna', tool: 'opencode', modelId: 'opencode/gpt-6-luna', label: 'GPT 6 Luna', family: 'OpenAI', free: false, priceInput: 0.1, priceOutput: 0.5, note: '按官方刊例价 USD/1M（≤272K）', source: SOURCE.opencode },
   { id: 'opencode/gpt-6.2-sol', tool: 'opencode', modelId: 'opencode/gpt-6.2-sol', label: 'GPT 6.2 Sol', family: 'OpenAI', free: false, priceInput: 2, priceOutput: 10, note: '按官方刊例价 USD/1M（≤272K）', source: SOURCE.opencode },
 
-  // ---------------- Trae（内置模型，非美国地区刊例价） ----------------
-  { id: 'trae/seed-2.1-turbo', tool: 'trae', modelId: 'Seed-2.1-Turbo', label: 'Seed-2.1-Turbo', family: 'ByteDance', free: false, priceInput: 0.5, priceOutput: 2.5, note: '非美国地区刊例价 USD/1M；套餐按 Token 用量计费', source: SOURCE.trae },
-  { id: 'trae/gpt-6-luna', tool: 'trae', modelId: 'GPT-6-Luna', label: 'GPT-6-Luna', family: 'OpenAI', free: false, priceInput: 0.1, priceOutput: 0.5, note: '≤272K 刊例价 USD/1M', source: SOURCE.trae },
-  { id: 'trae/gpt-6.2-sol', tool: 'trae', modelId: 'GPT-6.2-Sol', label: 'GPT-6.2-Sol', family: 'OpenAI', free: false, priceInput: 2, priceOutput: 10, note: '≤272K 刊例价 USD/1M', source: SOURCE.trae },
-  { id: 'trae/gpt-5.2', tool: 'trae', modelId: 'gpt-5.2', label: 'GPT-5.2', family: 'OpenAI', free: false, priceInput: 1.75, priceOutput: 14, note: '刊例价 USD/1M；也是官方 Subagent 可用模型 ID', source: SOURCE.trae },
-  { id: 'trae/gpt-5.4', tool: 'trae', modelId: 'gpt-5.4', label: 'GPT-5.4', family: 'OpenAI', free: false, priceInput: 2.5, priceOutput: 15, note: '≤272K 刊例价 USD/1M；Subagent 可用模型 ID', source: SOURCE.trae },
-  { id: 'trae/gemini-3.1-pro', tool: 'trae', modelId: 'gemini-3.1-pro', label: 'Gemini-3.1-Pro-Preview', family: 'Google', free: false, priceInput: 2, priceOutput: 12, note: '≤200K 刊例价 USD/1M；Subagent 可用模型 ID', source: SOURCE.trae },
-  { id: 'trae/gemini-3-flash-solo', tool: 'trae', modelId: 'gemini-3-flash-solo', label: 'Gemini-3-Flash-Preview', family: 'Google', free: false, priceInput: 0.5, priceOutput: 3, note: '刊例价 USD/1M；Subagent 可用模型 ID', source: SOURCE.trae },
-  { id: 'trae/deepseek-v4.1-flash', tool: 'trae', modelId: 'DeepSeek-V4.1-Flash', label: 'DeepSeek-V4.1-Flash', family: 'DeepSeek', free: false, priceInput: 0.3, priceOutput: 1.2, note: '非高峰刊例价 USD/1M；高峰价翻倍', source: SOURCE.trae },
-  { id: 'trae/kimi-k2.5', tool: 'trae', modelId: 'kimi-k2.5', label: 'Kimi-K2.5', family: 'Moonshot', free: false, priceInput: 0.6, priceOutput: 3, note: '刊例价 USD/1M；Subagent 可用模型 ID', source: SOURCE.trae },
-  { id: 'trae/minimax-m3', tool: 'trae', modelId: 'minimax-m3', label: 'MiniMax-M3', family: 'MiniMax', free: false, priceInput: 0.6, priceOutput: 2.4, note: '≤200K 刊例价 USD/1M；Subagent 可用模型 ID', source: SOURCE.trae },
-  { id: 'trae/claude-sonnet-4.5', tool: 'trae', modelId: 'claude-sonnet-4.5', label: 'Claude Sonnet 4.5', family: 'Anthropic', free: false, note: '官方模型列表收录；价格以 Trae 产品内模型选择器为准', source: SOURCE.trae },
+  // ---------------- Trae 中国版（积分消耗速度倍率口径，2026-11-24 以 IDE 模型选择器实测核对） ----------------
+  // creditRate 记「折扣前基准倍率」；实际显示值随账号身份（免费/会员）与时段（闲时）浮动，规则写在 note。
+  { id: 'trae/seed-2.1-turbo', tool: 'trae', modelId: 'Seed-2.1-Turbo', label: 'Seed-2.1-Turbo', family: 'ByteDance', free: false, creditRate: 0.4, note: '基准 0.4 倍。免费用户「专属补贴」全时段 5 折 → 0.20x；付费会员 2.5 折 → 0.10x。以 IDE 模型选择器实时显示为准', source: SOURCE.trae },
+  { id: 'trae/seed-code', tool: 'trae', modelId: 'Seed-Code', label: 'Seed-Code', family: 'ByteDance', free: false, creditRate: 0.12, note: '基准 0.12 倍，代码专精。免费用户「专属补贴」全时段 5 折 → 0.06x；付费会员 2.5 折 → 0.03x。以 IDE 显示为准', source: SOURCE.trae },
+  { id: 'trae/seed-2.1-pro-0915', tool: 'trae', modelId: 'Seed-2.1-Pro-0915', label: 'Seed-2.1-Pro-0915', family: 'ByteDance', free: false, creditRate: 0.8, note: 'IDE 内显示 0.80x；限时活动期内可能降至 1 折，以 IDE 显示为准', source: SOURCE.trae },
+  { id: 'trae/seed-evolving', tool: 'trae', modelId: 'Seed-Evolving', label: 'Seed-Evolving', family: 'ByteDance', free: false, creditRate: 0.8, note: 'IDE 内显示 0.80x；实验款，限时活动期内倍率可能变动', source: SOURCE.trae },
+  { id: 'trae/glm-5.3', tool: 'trae', modelId: 'GLM-5.3', label: 'GLM-5.3', family: 'Zhipu', free: false, creditRate: 0.78, note: 'IDE 内显示 0.78x（免费用户无折扣）；付费会员有 5 折 / 7.5 折限时活动，活动期与折后价以官方公告和 IDE 显示为准', source: SOURCE.traePricing },
+  { id: 'trae/glm-5.3-flash', tool: 'trae', modelId: 'GLM-5.3-Flash', label: 'GLM-5.3-Flash', family: 'Zhipu', free: false, creditRate: 0.08, note: 'IDE 内显示 0.08x；日常编码性价比档', source: SOURCE.trae },
+  { id: 'trae/glm-5.3-flashx', tool: 'trae', modelId: 'GLM-5.3-FlashX', label: 'GLM-5.3-FlashX', family: 'Zhipu', free: false, creditRate: 0.31, note: 'IDE 内显示 0.31x', source: SOURCE.trae },
+  { id: 'trae/glm-5.4', tool: 'trae', modelId: 'GLM-5.4', label: 'GLM-5.4', family: 'Zhipu', free: false, note: 'IDE 内显示锁形图标（当前套餐不可用）；解锁后倍率以 IDE 显示为准，官方未公开', source: SOURCE.trae },
+  { id: 'trae/deepseek-v4.1-flash', tool: 'trae', modelId: 'DeepSeek-V4.1-Flash', label: 'DeepSeek-V4.1-Flash', family: 'DeepSeek', free: false, creditRate: 0.12, note: '忙时基准 0.12 倍；空闲时段（22:00–次日 8:00）自动 5 折 → 0.06x；付费会员另有折扣。以 IDE 显示为准', source: SOURCE.trae },
+  { id: 'trae/deepseek-v4-pro', tool: 'trae', modelId: 'DeepSeek-V4-Pro', label: 'DeepSeek-V4-Pro', family: 'DeepSeek', free: false, creditRate: 0.72, note: '忙时基准 0.72 倍；空闲时段自动 5 折 → 0.36x。推理最强档，以 IDE 显示为准', source: SOURCE.trae },
 
   // ---------------- Qoder（Credits 倍率口径） ----------------
   { id: 'qoder/qwen3.8-flash', tool: 'qoder', modelId: 'Qwen3.8-Flash', label: 'Qwen3.8-Flash', family: 'Alibaba', free: true, creditRate: 0, note: '官方限时免费：Credits 倍率由 0.1x 降为 0.0x（2026-09-18 起），以产品显示为准', source: SOURCE.qoderActivity },
@@ -436,7 +523,10 @@ export function modelToolForAgent(agentId?: string): ModelTool | undefined {
 /** 模型倍率展示文案：区分「免费 / 官方Credits倍率 / 官方刊例价 / 未公开」。 */
 export function modelRateText(entry: ModelEntry): string {
   if (entry.free) return entry.creditRate === 0 ? '0x（官方免费）' : '免费（官方限时）'
-  if (entry.creditRate !== undefined) return `${entry.creditRate}x`
+  if (entry.creditRate !== undefined) {
+    // Trae CN 实际倍率随账号身份与时段浮动，这里显式标注「基准」，避免被当成实时结算价
+    return entry.tool === 'trae' ? `${entry.creditRate}x 基准` : `${entry.creditRate}x`
+  }
   if (entry.priceInput !== undefined && entry.priceOutput !== undefined) {
     return `$${entry.priceInput}/$${entry.priceOutput} 每 1M`
   }
@@ -446,49 +536,58 @@ export function modelRateText(entry: ModelEntry): string {
 export const DEFAULT_AGENTS: AgentDefinition[] = [
   {
     id: 'agent-trae', name: 'Trae CLI', kind: 'native-acp', vendor: 'Trae',
-    command: 'traecli', args: ['acp serve'], statusArgs: ['login', 'status'], env: {}, headlessArgs: [], headlessFallback: false, usageSupported: false, workflow: '', enabled: true, authMode: 'native-login', role: 'architect', isLead: true,
+    command: 'traecli', args: ['acp serve'], statusArgs: ['login', 'status'], env: {}, headlessArgs: [], headlessFallback: false, usageSupported: false, workflow: '', enabled: true, authMode: 'native-login', role: 'architect', isLead: true, health: 'unknown',
     installed: false, note: '通过官方 CLI 登录态启动 ACP；额度由官方账号决定'
   },
   {
     id: 'agent-qoder', name: 'Qoder CLI', kind: 'native-acp', vendor: 'Qoder',
-    command: 'qoder', args: ['--acp'], statusArgs: undefined, env: {}, headlessArgs: [], headlessFallback: false, usageSupported: false, workflow: '', isLead: false, enabled: true, authMode: 'native-login', role: 'developer',
+    command: 'qoder', args: ['--acp'], statusArgs: undefined, env: {}, headlessArgs: [], headlessFallback: false, usageSupported: false, workflow: '', isLead: false, health: 'unknown', enabled: true, authMode: 'native-login', role: 'developer',
     installed: false, note: '官方文档为 qoder --acp（规格中的 qodercli 需实机确认）；ACP 复用 Qoder CLI 登录态'
   },
   {
     id: 'agent-minimax', name: 'MiniMax Code', kind: 'native-acp', vendor: 'MiniMax',
-    command: 'mcode', args: ['acp'], env: {}, headlessCommand: 'mcode', headlessArgs: ['exec'], headlessFallback: true, usageSupported: false, workflow: '', isLead: false, enabled: true, authMode: 'native-login', role: 'reviewer',
+    command: 'mcode', args: ['acp'], env: {}, headlessCommand: 'mcode', headlessArgs: ['exec'], headlessFallback: true, usageSupported: false, workflow: '', isLead: false, health: 'unknown', enabled: true, authMode: 'native-login', role: 'reviewer',
     installed: false, note: 'mcode login 管理登录；Token Plan 需账号有可用额度'
   },
   {
     id: 'agent-qwen', name: 'Qwen Code', kind: 'native-acp', vendor: 'Alibaba Cloud',
-    command: 'qwen', args: ['--acp'], statusArgs: undefined, env: {}, headlessCommand: 'qwen', headlessArgs: ['-p'], headlessFallback: true, usageSupported: false, workflow: '', isLead: false, enabled: true, authMode: 'native-login', role: 'qa',
+    command: 'qwen', args: ['--acp'], statusArgs: undefined, env: {}, headlessCommand: 'qwen', headlessArgs: ['-p'], headlessFallback: true, usageSupported: false, workflow: '', isLead: false, health: 'unknown', enabled: true, authMode: 'native-login', role: 'qa',
     installed: false, note: '规格写 --acp；主分支文档写 qwen serve (ACP daemon)，需按本机版本调整。订阅账号需 Plus/Pro'
   },
   {
-    id: 'agent-workbuddy', name: 'WorkBuddy', kind: 'remote-acp', vendor: 'Tencent',
-    command: '', args: [], env: {}, headlessArgs: [], headlessFallback: false, usageSupported: false, workflow: '', isLead: false, enabled: false, authMode: 'unknown', role: 'researcher',
-    installed: false, note: '待验证：桌面版本地 ACP 未确认；企业远程 ACP 不等于本机额度'
+    id: 'agent-workbuddy', name: 'WorkBuddy', kind: 'native-acp', vendor: 'Tencent',
+    command: 'node', args: ['--acp'], env: {}, headlessArgs: ['-p'], headlessFallback: true,
+    usageSupported: false, workflow: '', isLead: false, health: 'unknown', enabled: true, authMode: 'native-login', role: 'developer',
+    installed: false, note: '使用 WorkBuddy 内置 codebuddy CLI；首次请在交互式 CLI 中执行 /login，再用 --acp / -p 复用登录态'
   },
   {
     id: 'agent-opencode', name: 'OpenCode', kind: 'native-acp', vendor: 'OpenCode',
     command: 'opencode', args: ['acp'], env: {}, headlessArgs: [], headlessFallback: false,
-    usageSupported: false, workflow: '', isLead: false, enabled: true,
+    usageSupported: false, workflow: '', isLead: false, health: 'unknown', enabled: true,
     authMode: 'native-login', role: 'developer', installed: false,
     note: '官方 ACP 命令为 opencode acp；复用 OpenCode 已配置的 Provider 凭据，需 opencode auth login'
   },
   {
     id: 'agent-claude', name: 'Claude Code', kind: 'native-process', vendor: 'Anthropic',
     command: 'claude', args: [], env: {}, headlessCommand: 'claude', headlessArgs: ['-p'],
-    headlessFallback: true, usageSupported: false, workflow: '', isLead: false,
+    headlessFallback: true, usageSupported: false, workflow: '', isLead: false, health: 'unknown',
     enabled: true, authMode: 'native-login', role: 'developer', installed: false,
     note: '使用官方 headless 命令 claude -p，复用 Claude Code 本机登录态；不声明 ACP'
   },
   {
     id: 'agent-codex', name: 'Codex CLI', kind: 'native-process', vendor: 'OpenAI',
     command: 'codex', args: [], env: {}, headlessCommand: 'codex', headlessArgs: ['exec'],
-    headlessFallback: true, usageSupported: false, workflow: '', isLead: false,
+    headlessFallback: true, usageSupported: false, workflow: '', isLead: false, health: 'unknown',
     enabled: true, authMode: 'native-login', role: 'developer', installed: false,
     note: '使用官方 headless 命令 codex exec，复用 Codex 本机登录态；不声明 ACP'
+  },
+  {
+    id: 'agent-doubao', name: '豆包 CLI', kind: 'native-process', vendor: 'ByteDance',
+    command: 'doubao', args: [], env: {}, headlessCommand: 'doubao', headlessArgs: ['-p'],
+    statusArgs: ['auth', 'status'],
+    headlessFallback: false, usageSupported: false, workflow: '', isLead: false, health: 'unknown',
+    enabled: true, authMode: 'native-login', role: 'developer', installed: false,
+    note: '官方 npm 包 @bytedance/doubao-cli：doubao login 登录，doubao auth status 查登录态，doubao -p "任务" 为官方无头模式，--model <ID或名称> 官方支持（可用值见 doubao model list，需先登录）。不声明 ACP；支持 Windows x64 / macOS ARM64 / Linux x64，Node >= 18'
   }
 ]
 

@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process'
 import { access, readdir } from 'node:fs/promises'
-import { constants } from 'node:fs'
+import { constants, existsSync, readdirSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
+import { homedir } from 'node:os'
 import type { AgentDefinition } from '@shared/index'
 
 export interface DetectionResult {
@@ -35,6 +36,37 @@ function runCaptured(command: string, args: string[], timeoutMs = 8000): Promise
   })
 }
 
+/**
+ * Electron 从桌面快捷方式启动时拿到的 PATH 往往不包含用户后装的 npm 全局目录，
+ * 也不包含 WorkBuddy 自带的 node/CLI 目录，导致「明明装了却检测不到 / 起了就退出」。
+ * 这里列出常见的 CLI 安装目录，检测与 spawn 共用，避免依赖启动方式。
+ */
+export function extraBinDirs(): string[] {
+  const home = homedir()
+  const dirs = new Set<string>()
+  const push = (path: string | undefined) => { if (path) dirs.add(path) }
+  push(process.env.APPDATA ? join(process.env.APPDATA, 'npm') : undefined)
+  push(process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'npm') : undefined)
+  push(join(home, '.opencode', 'bin'))
+  push(join(home, '.local', 'bin'))
+  push(join(home, '.bun', 'bin'))
+  push(join(home, '.qoder', 'bin', 'qodercli'))
+  push(join(home, '.cargo', 'bin'))
+  const nodeVersions = join(home, '.workbuddy', 'binaries', 'node', 'versions')
+  try {
+    for (const version of readdirSync(nodeVersions)) push(join(nodeVersions, version))
+  } catch { /* ignore */ }
+  return [...dirs].filter((dir) => existsSync(dir))
+}
+
+/** 为子进程补齐 CLI 所在目录与 node 所在目录（.cmd shim 依赖 node 可执行）。 */
+export function augmentEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const dirs = extraBinDirs()
+  const merged = [...dirs, ...(env.PATH ?? '').split(process.platform === 'win32' ? ';' : ':')]
+  const path = [...new Set(merged.filter(Boolean))].join(process.platform === 'win32' ? ';' : ':')
+  return { ...env, PATH: path }
+}
+
 async function resolveCommandPath(command: string): Promise<string | undefined> {
   if (isAbsolute(command)) {
     try { await access(command, constants.X_OK); return command } catch { return undefined }
@@ -42,8 +74,19 @@ async function resolveCommandPath(command: string): Promise<string | undefined> 
   if (process.platform !== 'win32') return command || undefined
   const result = await runCaptured('where.exe', [command])
   if (result.code === 0) {
-    const found = result.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean)
+    const candidates = result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+    // npm 全局命令在 Windows 上常同时生成无扩展名 shell shim 与 .cmd；execFile 无法直接启动无扩展名 shim（ENOENT）。
+    // 优先选择带可执行扩展名的那一个（其中 .cmd/.bat 会由 runCaptured/spawnProcess 走 cmd.exe 包装）。
+    const found = candidates.find((path) => /\.(exe|cmd|bat)$/i.test(path)) ?? candidates[0]
     if (found) return found
+  }
+  // where.exe 受 PATH 限制；再扫一遍已知安装目录，兼容从桌面快捷方式启动的 Electron。
+  const extensions = ['.cmd', '.exe', '.bat', '']
+  for (const dir of extraBinDirs()) {
+    for (const ext of extensions) {
+      const candidate = join(dir, `${command}${ext}`)
+      if (existsSync(candidate)) return candidate
+    }
   }
   const home = process.env.USERPROFILE
   const fallback = command === 'qoder' || command === 'qodercli'
@@ -60,7 +103,8 @@ const DESKTOP_APP_HINTS: Record<string, string[]> = {
   qoder: ['Qoder CN', 'Qoder'],
   qodercli: ['Qoder CN', 'Qoder'],
   mcode: ['MiniMax Code', 'MiniMax'],
-  qwen: ['QianwenApp', 'Qwen Code', '通义']
+  qwen: ['QianwenApp', 'Qwen Code', '通义'],
+  doubao: ['Doubao', '豆包']
 }
 
 /** 只读扫描常见安装目录，判断“桌面客户端已装”；这不等于 CLI/ACP 可用。 */
@@ -81,6 +125,30 @@ export async function detectDesktopApp(command: string): Promise<string | undefi
     }
   }
   return undefined
+}
+
+/** WorkBuddy 桌面端自带的 codebuddy CLI：支持 --acp stdio 与 -p headless。 */
+export function resolveWorkBuddyCliPath(): string | undefined {
+  const resources = process.env.WORKBUDDY_RESOURCES_PATH
+  if (!resources) return undefined
+  const script = join(resources, 'app.asar.unpacked', 'cli', 'bin', 'codebuddy')
+  return existsSync(script) ? script : undefined
+}
+
+export async function detectWorkBuddyCli(): Promise<DetectionResult> {
+  const script = resolveWorkBuddyCliPath()
+  if (!script) {
+    return { installed: false, detail: '未找到 WorkBuddy 内置 codebuddy CLI；请从 WorkBuddy 安装目录启动应用后再检测' }
+  }
+  const node = process.env.CODEBUDDY_NODE_BIN || 'node'
+  const result = await runCaptured(node, [script, '--version'], 15000)
+  const version = result.code === 0 ? result.stdout.split(/\r?\n/)[0] : process.env.WORKBUDDY_APP_VERSION
+  return {
+    installed: true,
+    commandPath: script,
+    version,
+    detail: 'WorkBuddy 内置 codebuddy CLI，支持 --acp；复用本机账号登录态'
+  }
 }
 
 /** 只调用官方 CLI 与系统 where.exe，不读取任何第三方私有凭据文件。 */
@@ -117,6 +185,10 @@ export async function checkLoginStatus(definition: AgentDefinition): Promise<Log
   }
   const result = await runCaptured(definition.command, definition.statusArgs, 12000)
   const text = `${result.stdout}\n${result.stderr}`.trim().slice(0, 300)
+  // 部分 CLI（如 doubao auth status）未登录时仍以退出码 0 返回 login_required 提示，需按文本识别。
+  if (/login_required|not\s+logged\s+in|未登录/i.test(text)) {
+    return { state: 'not-logged-in', detail: text }
+  }
   if (result.code === 0) return { state: 'logged-in', detail: text || '官方 CLI 状态命令返回成功' }
   return { state: 'not-logged-in', detail: text || '官方 CLI 状态命令返回失败，请在原 CLI 中登录' }
 }

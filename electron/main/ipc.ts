@@ -7,7 +7,8 @@ import { refreshPath } from '@adapters/index'
 import type { Orchestrator } from '@orchestrator/index'
 import { humanApprove, leadSignoff, requestReview, resolveReview, startReview } from '@orchestrator/review'
 import { sendMessage } from '@orchestrator/messaging'
-import type { AgentDefinition, ApiProvider, Team, TeamMember, Task, Template, MemoryEntry, CustomAdapter, ReviewCycle } from '@shared/index'
+import { probeAgentOnce, probeAgents } from '@orchestrator/health'
+import type { AgentDefinition, ApiProvider, ChatRun, Team, TeamMember, Task, Template, MemoryEntry, CustomAdapter, ReviewCycle } from '@shared/index'
 import {
   AgentDefinitionSchema, ApiProviderSchema, TeamSchema, TaskSchema,
   TemplateSchema, MemoryEntrySchema, CustomAdapterSchema, newId, nowIso
@@ -21,6 +22,11 @@ export const IPC = {
   AGENTS_DETECT: 'agents:detect',
   AGENTS_LOGIN: 'agents:login',
   AGENTS_DETECT_ALL: 'agents:detectAll',
+  AGENTS_PROBE: 'agents:probe',
+  AGENTS_PROBE_ALL: 'agents:probeAll',
+  CHAT_DISPATCH: 'chat:dispatch',
+  CHAT_RUNS: 'chat:runs',
+  CHAT_CANCEL: 'chat:cancel',
   PATH_REFRESH: 'system:refreshPath',
   PICK_FOLDER: 'system:pickFolder',
   CREDENTIALS_SET: 'credentials:set',
@@ -116,6 +122,50 @@ export function registerIpc(
     }
     return results
   })
+
+  /** 单个 Agent 的真实应答体检：真连一次、真发一句话。 */
+  ipcMain.handle(IPC.AGENTS_PROBE, async (_event, input: { agentId: string; teamId?: string }) => {
+    const team = input.teamId ? store.get<Team>('teams', 'id', input.teamId) : undefined
+    const result = await probeAgentOnce(store, registry, input.agentId, { cwd: team?.defaultWorkspace })
+    getWebContents()?.send(IPC.EVENT, {
+      id: newId('event'), type: 'probe.completed', agentId: result.agentId,
+      message: `应答体检：${result.agentName} · ${result.state}（${result.latencyMs}ms）`,
+      data: { result }, timestamp: result.checkedAt
+    })
+    return result
+  })
+
+  /** 全群体检：并发可控，进度逐条推给渲染层。 */
+  ipcMain.handle(IPC.AGENTS_PROBE_ALL, async (_event, input?: { teamId?: string; agentIds?: string[] }) => {
+    const team = input?.teamId ? store.get<Team>('teams', 'id', input.teamId) : undefined
+    return probeAgents(store, registry, {
+      teamId: input?.teamId,
+      agentIds: input?.agentIds,
+      cwd: team?.defaultWorkspace,
+      concurrency: 3,
+      onResult: (result) => {
+        getWebContents()?.send(IPC.EVENT, {
+          id: newId('event'), type: 'probe.completed', agentId: result.agentId,
+          message: `应答体检：${result.agentName} · ${result.state}（${result.latencyMs}ms）`,
+          data: { result }, timestamp: result.checkedAt
+        })
+      }
+    })
+  })
+
+  ipcMain.handle(IPC.CHAT_DISPATCH, async (_event, input: {
+    teamId: string; content: string; targetAgentId?: string; cwd?: string; maxParticipants?: number
+  }) => {
+    const team = store.get<Team>('teams', 'id', input.teamId)
+    if (!team) throw new Error('群聊不存在')
+    return orchestrator.dispatchChat({
+      ...input,
+      cwd: input.cwd || team.defaultWorkspace || undefined
+    })
+  })
+  ipcMain.handle(IPC.CHAT_RUNS, (_event, teamId?: string) => store.chatRuns(teamId) as ChatRun[])
+  ipcMain.handle(IPC.CHAT_CANCEL, (_event, runId: string) => orchestrator.cancelRun(runId))
+
   ipcMain.handle(IPC.PATH_REFRESH, async () => ({ count: (await refreshPath()).length }))
   ipcMain.handle(IPC.PICK_FOLDER, async () => {
     const result = await dialog.showOpenDialog({ properties: ['openDirectory'], title: '选择群聊项目文件夹' })

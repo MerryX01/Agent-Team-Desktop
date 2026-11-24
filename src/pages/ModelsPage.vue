@@ -54,9 +54,11 @@ function applyToAgent(entry: ModelEntry) {
 
     <div class="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-[12px] text-amber-800 leading-relaxed">
       <div class="font-semibold mb-1">倍率口径（务必先读）</div>
-      <div>OpenCode / Trae：官方只公布刊列价（USD / 1M token），没有「倍率」概念，本表直接展示输入输出价；免费模型标 0x。</div>
+      <div>OpenCode：官方只公布刊列价（USD / 1M token），没有「倍率」概念，本表直接展示输入输出价；免费模型标 0x。</div>
+      <div>Trae：只收中国版（Trae CN），按「积分 × 模型消耗速度倍率」计费。表中是官方折扣表的<b>基准倍率</b>，实际值随账号身份（免费 5 折 / 会员 2.5 折）和时段（DeepSeek 系 22:00–次日 8:00 闲时 5 折）浮动，<b>以 IDE 模型选择器实时显示为准</b>。国际版（docs.trae.ai）为 USD 刊列价，与积分不可换算，不在此表混列。</div>
       <div>Qoder：官方用 Credits 消耗倍率，仅个别模型公开（如 Qwen3.8-Flash 限时 0.0x）；其余标注「未公开」，以产品内模型选择器为准。</div>
       <div>Claude Code / Codex CLI：走本机订阅登录态，工具本身不公开倍率，费用由原厂账号决定。</div>
+      <div>豆包 CLI：官方支持 --model，但可用模型需先登录后用 doubao model list 查看，官方未公布倍率；本目录不预置未经核实的模型 ID。</div>
       <div class="mt-1">限时免费与地区限制会变动，点击来源链接以官方文档为最终依据。</div>
     </div>
 

@@ -3,7 +3,7 @@ import type { AgentDefinition, AgentEvent, FileChange, PermissionPolicy } from '
 import { newId, nowIso } from '@shared/index'
 import { acpAdapter } from './acp'
 import { ApiProviderAdapter, MemoryCredentialStore, type CredentialStore } from './api-provider'
-import { checkLoginStatus, detectAgent, detectDesktopApp } from './detect'
+import { checkLoginStatus, detectAgent, detectDesktopApp, detectWorkBuddyCli } from './detect'
 import { processAdapter } from './process'
 import { RemoteAcpAdapter } from './remote'
 import type { AgentAdapter, AgentSession, ApprovalDecision, ApprovalRequest, ConnectOptions, EventDraft, EventSink } from './types'
@@ -50,6 +50,14 @@ export class AdapterRegistry {
   async detect(agentId: string): Promise<{ installed: boolean; version?: string; commandPath?: string; detail?: string }> {
     const definition = this.store.get<AgentDefinition>('agents', 'id', agentId)
     if (!definition) throw new Error(`Agent 不存在: ${agentId}`)
+    if (definition.id === 'agent-workbuddy') {
+      const result = await detectWorkBuddyCli()
+      this.store.update('agents', 'id', agentId, {
+        installed: result.installed, commandPath: result.commandPath, version: result.version,
+        lastCheck: nowIso(), note: result.detail ?? definition.note
+      })
+      return result
+    }
     if (definition.kind === 'api-provider') return { installed: true, detail: 'API Key 通道' }
     const result = definition.kind === 'remote-acp'
       ? await this.adapterFor(definition).detect(definition)

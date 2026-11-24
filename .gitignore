@@ -60,3 +60,6 @@ playwright-report/
 
 # 本地验证截图
 preview-*.png
+
+# 临时探测数据
+tmp/

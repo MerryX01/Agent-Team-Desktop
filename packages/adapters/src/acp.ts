@@ -5,7 +5,7 @@ import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
 import type { AgentDefinition } from '@shared/index'
 import { defaultPermissionPolicy, modelById, newId, nowIso } from '@shared/index'
-import { buildCmdLine, checkLoginStatus, detectAgent } from './detect'
+import { buildCmdLine, checkLoginStatus, detectAgent, augmentEnv, resolveWorkBuddyCliPath } from './detect'
 import { diffSnapshots, ensurePathInWorkspace, readFileSafe, writeFileSafe } from './diff'
 import { evaluatePermission, type EvaluablePolicy, type PermissionKind, type PermissionRequest } from './policy'
 import type { AgentAdapter, AgentSession, ApprovalDecision, ConnectOptions, EventDraft } from './types'
@@ -15,23 +15,43 @@ interface LiveSession extends AgentSession {
   conn: acp.ClientConnection
   active: acp.ActiveSession
   child: ChildProcessWithoutNullStreams
+  sendTimeoutMs: number
 }
 
+const DEFAULT_SEND_TIMEOUT_MS = 300000
+
 const sessions = new Map<string, LiveSession>()
+
+/** commandPath 只在同名命令时替换，避免把别的入口（如 WorkBuddy 的脚本）当成启动命令。 */
+function sameCommandName(commandPath?: string, command?: string): boolean {
+  if (!commandPath || !command) return false
+  const base = commandPath.split(/[\\/]/).pop() ?? ''
+  const target = command.split(/[\\/]/).pop() ?? ''
+  return base.toLowerCase().replace(/\.(cmd|bat|exe)$/i, '') === target.toLowerCase().replace(/\.(cmd|bat|exe)$/i, '')
+}
 
 function spawnAgent(definition: AgentDefinition, cwd: string): ChildProcessWithoutNullStreams {
   if (!definition.command) throw new AdapterError('未配置启动命令，请在 Agent 管理页指定', 'connect')
   if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
     throw new AdapterError(`工作目录不存在或不是目录: ${cwd}`, 'connect')
   }
-  const args = definition.args ?? []
-  const env = { ...process.env, ...(definition.env ?? {}) }
-  const winScript = process.platform === 'win32' && /\.(cmd|bat)$/i.test(definition.command)
+  let command = definition.command
+  let args = definition.args ?? []
+  if (definition.id === 'agent-workbuddy') {
+    const script = resolveWorkBuddyCliPath()
+    if (!script) throw new AdapterError('未找到 WorkBuddy 内置 codebuddy CLI，请从 WorkBuddy 安装目录启动应用', 'connect')
+    args = [script, ...args]
+  } else if (definition.commandPath && existsSync(definition.commandPath) && sameCommandName(definition.commandPath, definition.command)) {
+    // 检测阶段解析到的绝对路径优先，避免 Electron 的 PATH 与终端不一致导致 ENOENT。
+    command = definition.commandPath
+  }
+  const env = augmentEnv({ ...process.env, ...(definition.env ?? {}) })
+  const winScript = process.platform === 'win32' && /\.(cmd|bat)$/i.test(command)
   const child = winScript
-    ? spawn('cmd.exe', ['/d', '/s', '/c', buildCmdLine(definition.command, args)], {
+    ? spawn('cmd.exe', ['/d', '/s', '/c', buildCmdLine(command, args)], {
       cwd, env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe']
     })
-    : spawn(definition.command, args, { cwd, env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+    : spawn(command, args, { cwd, env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
   return child as ChildProcessWithoutNullStreams
 }
 
@@ -42,7 +62,10 @@ function describeUpdate(update: acp.SessionUpdate): EventDraft | undefined {
         ? { type: 'agent.message.delta', message: update.content.text }
         : { type: 'agent.message.delta', message: `[${update.content.type}]` }
     case 'agent_thought_chunk':
-      return { type: 'agent.message.delta', message: update.content.type === 'text' ? update.content.text : '[thought]' }
+      // 思考流与正式回复分开，群聊里才能单独展示「思考过程」而不污染答案。
+      return update.content.type === 'text'
+        ? { type: 'agent.thought.delta', message: update.content.text }
+        : { type: 'agent.thought.delta', message: `[${update.content.type}]` }
     case 'tool_call':
       return { type: 'agent.tool.started', message: update.title || '工具调用', data: { toolCallId: update.toolCallId, status: update.status ?? 'pending' } }
     case 'tool_call_update':
@@ -326,7 +349,8 @@ export class AcpAdapter implements AgentAdapter {
       }
       const session: LiveSession = {
         id: newId('session'), agentId: definition.id, sessionId: active.sessionId, pid: child.pid,
-        protocol: 'acp', status: 'online', cwd, startedAt: nowIso(), conn, active, child
+        protocol: 'acp', status: 'online', cwd, startedAt: nowIso(), conn, active, child,
+        sendTimeoutMs: options.sendTimeoutMs ?? DEFAULT_SEND_TIMEOUT_MS
       }
       sessions.set(session.id, session)
       return session
@@ -361,7 +385,7 @@ export class AcpAdapter implements AgentAdapter {
     })()
 
     try {
-      await withTimeout(pump, 120000, 'ACP prompt')
+      await withTimeout(pump, live.sendTimeoutMs, 'ACP prompt')
       live.status = 'online'
       return output
     } catch (error) {

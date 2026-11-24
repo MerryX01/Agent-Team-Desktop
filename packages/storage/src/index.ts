@@ -1,20 +1,20 @@
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import type { AgentDefinition, AgentEvent, AgentMessage, ApiProvider, Approval, CustomAdapter, FileChange, MemoryEntry, ReviewCycle, Task, Team, TeamMember, Template, UsageRecord } from '@shared/index'
+import type { AgentDefinition, AgentEvent, AgentMessage, ApiProvider, Approval, ChatRun, CustomAdapter, FileChange, MemoryEntry, ReviewCycle, Task, Team, TeamMember, Template, UsageRecord } from '@shared/index'
 import { DEFAULT_AGENTS, defaultPermissionPolicy } from '@shared/index'
 
 type Storable = Record<string, unknown>
 type TableName = 'agents' | 'api_providers' | 'teams' | 'team_members' | 'tasks' | 'task_dependencies' |
   'agent_sessions' | 'run_events' | 'messages' | 'approvals' | 'workspaces' |
   'file_changes' | 'templates' | 'memory_entries' | 'usage_records' | 'custom_adapters' |
-  'review_cycles'
+  'review_cycles' | 'chat_runs'
 
 const TABLES: TableName[] = [
   'agents', 'api_providers', 'teams', 'team_members', 'tasks', 'task_dependencies',
   'agent_sessions', 'run_events', 'messages', 'approvals', 'workspaces',
   'file_changes', 'templates', 'memory_entries', 'usage_records', 'custom_adapters',
-  'review_cycles'
+  'review_cycles', 'chat_runs'
 ]
 
 function assertTable(table: string): asserts table is TableName {
@@ -39,6 +39,8 @@ function fromRow<T>(row: Record<string, unknown> | undefined): T | undefined {
       try { result[key] = JSON.parse(String(value ?? '{}')) } catch { result[key] = {} }
     } else if (key === 'data' || key === 'metadata' || key === 'policy') {
       try { result[key] = JSON.parse(String(value ?? '{}')) } catch { result[key] = {} }
+    } else if (key === 'participants' || key === 'gate') {
+      try { result[key] = JSON.parse(String(value ?? (key === 'gate' ? '{}' : '[]'))) } catch { result[key] = key === 'gate' ? {} : [] }
     } else if (key === 'enabled' || key === 'verified' || key === 'canWrite' || key === 'approvalRequired' ||
                key === 'headlessFallback' || key === 'usageSupported' || key === 'binary' || key === 'isLead' ||
                key === 'pinned' || key === 'installed') {
@@ -147,6 +149,13 @@ export class SqliteStore {
         requesterAgentId TEXT, round INTEGER NOT NULL, status TEXT NOT NULL,
         summary TEXT NOT NULL, findings TEXT NOT NULL, createdAt TEXT NOT NULL, completedAt TEXT
       );
+      CREATE TABLE IF NOT EXISTS chat_runs (
+        id TEXT PRIMARY KEY, runId TEXT NOT NULL, teamId TEXT NOT NULL, content TEXT NOT NULL,
+        status TEXT NOT NULL, participants TEXT NOT NULL DEFAULT '[]', deliverable TEXT NOT NULL DEFAULT '',
+        deliverableAgentId TEXT, deliverableMessageId TEXT, gate TEXT NOT NULL DEFAULT '{}',
+        durationMs INTEGER NOT NULL DEFAULT 0, createdAt TEXT NOT NULL, completedAt TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_runs_team ON chat_runs(teamId);
       CREATE INDEX IF NOT EXISTS idx_reviews_task ON review_cycles(taskId);
       CREATE INDEX IF NOT EXISTS idx_changes_run ON file_changes(runId);
       CREATE INDEX IF NOT EXISTS idx_events_run ON run_events(runId);
@@ -163,6 +172,10 @@ export class SqliteStore {
     this.ensureColumn('agents', 'usageSupported', 'INTEGER NOT NULL DEFAULT 0')
     this.ensureColumn('agents', 'desktopPath', 'TEXT')
     this.ensureColumn('agents', 'modelRef', 'TEXT')
+    this.ensureColumn('agents', 'health', "TEXT NOT NULL DEFAULT 'unknown'")
+    this.ensureColumn('agents', 'healthDetail', 'TEXT')
+    this.ensureColumn('agents', 'latencyMs', 'INTEGER')
+    this.ensureColumn('agents', 'lastProbeAt', 'TEXT')
     this.ensureColumn('teams', 'isolation', "TEXT NOT NULL DEFAULT 'none'")
     this.ensureColumn('teams', 'policy', "TEXT NOT NULL DEFAULT '{}'")
     this.ensureColumn('approvals', 'kind', "TEXT NOT NULL DEFAULT 'other'")
@@ -208,7 +221,7 @@ export class SqliteStore {
     if (this.count('agents') === 0) {
       for (const agent of DEFAULT_AGENTS) this.insert('agents', agent)
     } else {
-      for (const id of ['agent-opencode', 'agent-claude', 'agent-codex']) {
+      for (const id of ['agent-opencode', 'agent-claude', 'agent-codex', 'agent-doubao']) {
         const builtIn = DEFAULT_AGENTS.find((agent) => agent.id === id)
         if (builtIn && !this.get('agents', 'id', id)) this.insert('agents', builtIn)
       }
@@ -225,6 +238,13 @@ export class SqliteStore {
     this.db.prepare("UPDATE agents SET role = 'reviewer' WHERE id = 'agent-minimax' AND role = 'developer'").run()
     this.db.prepare("UPDATE agents SET role = 'qa' WHERE id = 'agent-qwen' AND role = 'developer'").run()
     this.db.prepare("UPDATE agents SET role = 'researcher' WHERE id = 'agent-workbuddy' AND role = 'general'").run()
+    this.db.prepare(`
+      UPDATE agents SET kind = 'native-acp', authMode = 'native-login', command = 'node',
+        args = '["--acp"]', headlessCommand = 'node', headlessArgs = '["-p"]',
+        headlessFallback = 1, enabled = 1, role = 'developer',
+        note = '使用 WorkBuddy 内置 codebuddy CLI；首次请在交互式 CLI 中执行 /login，再用 --acp / -p 复用登录态'
+      WHERE id = 'agent-workbuddy' AND kind = 'remote-acp'
+    `).run()
     if (leadId) {
       this.db.prepare('UPDATE teams SET leadAgentId = ? WHERE leadAgentId IS NULL').run(leadId)
     }
@@ -336,6 +356,16 @@ export class SqliteStore {
     return taskId
       ? this.all<ReviewCycle>('review_cycles', 'taskId = ? ORDER BY createdAt ASC', [taskId])
       : this.all<ReviewCycle>('review_cycles', '1 = 1 ORDER BY createdAt DESC LIMIT 300')
+  }
+
+  chatRuns(teamId?: string, limit = 30): ChatRun[] {
+    const rows = teamId
+      ? this.all<ChatRun>('chat_runs', 'teamId = ? ORDER BY createdAt DESC LIMIT ?', [teamId, limit])
+      : this.all<ChatRun>('chat_runs', '1 = 1 ORDER BY createdAt DESC LIMIT ?', [limit])
+    return rows
+  }
+  latestChatRun(teamId: string): ChatRun | undefined {
+    return this.chatRuns(teamId, 1)[0]
   }
 
   close(): void { this.db.close() }

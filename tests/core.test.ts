@@ -31,8 +31,9 @@ function makeTask(taskId: string, agentId: string, dependsOn: string[] = []): Ta
 describe('SQLite 存储', () => {
   it('初始化默认 Agent，并支持 CRUD 与事件流', () => {
     const store = new SqliteStore()
-    expect(store.agents().length).toBe(8)
+    expect(store.agents().length).toBe(9)
     expect(store.agents().some((agent) => agent.id === 'agent-opencode')).toBe(true)
+    expect(store.agents().some((agent) => agent.id === 'agent-doubao')).toBe(true)
     expect(typeof store.agents()[0].installed).toBe('boolean')
     store.insert('teams', { id: 'team-1', name: '测试团队', description: '', defaultWorkspace: '', maxConcurrency: 2, permissionMode: 'ask', isolation: 'none', policy: defaultPermissionPolicy() } satisfies Team)
     expect(store.get<Team>('teams', 'id', 'team-1')?.name).toBe('测试团队')

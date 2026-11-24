@@ -1,12 +1,23 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
-  AgentDefinition, AgentEvent, AgentMessage, ApiProvider, Approval, CustomAdapter, FileChange,
+  AgentDefinition, AgentEvent, AgentMessage, AgentProbeResult, ApiProvider, Approval, ChatRun, CustomAdapter, FileChange,
   MemoryEntry, ReviewCycle, Team, TeamMember, Task, Template, UsageRecord
 } from '@shared/index'
 
 type ProviderView = ApiProvider & { hasKey?: boolean }
 type Settings = Record<string, unknown>
 type RunResult = { runId: string; completed: string[]; failed: string[]; cancelled: string[] }
+type ChatDispatchResult = {
+  runId: string
+  chatRunId: string
+  taskId: string
+  status: ChatRun['status']
+  participants: ChatRun['participants']
+  deliverable: string
+  deliverableAgentId?: string
+  gate: ChatRun['gate']
+  durationMs: number
+}
 
 const invoke = <T>(channel: string, ...args: unknown[]): Promise<T> => ipcRenderer.invoke(channel, ...args) as Promise<T>
 
@@ -17,7 +28,15 @@ const api = {
     remove: (id: string) => invoke<AgentDefinition[]>('agents:remove', id),
     detect: (id: string) => invoke<{ installed: boolean; version?: string; commandPath?: string; detail?: string }>('agents:detect', id),
     detectAll: () => invoke<Record<string, { installed: boolean; detail?: string; version?: string }>>('agents:detectAll'),
-    loginStatus: (id: string) => invoke<{ state: string; detail: string }>('agents:login', id)
+    loginStatus: (id: string) => invoke<{ state: string; detail: string }>('agents:login', id),
+    probe: (id: string, teamId?: string) => invoke<AgentProbeResult>('agents:probe', { agentId: id, teamId }),
+    probeAll: (teamId?: string, agentIds?: string[]) => invoke<AgentProbeResult[]>('agents:probeAll', { teamId, agentIds })
+  },
+  chat: {
+    dispatch: (input: { teamId: string; content: string; targetAgentId?: string; cwd?: string; maxParticipants?: number }) =>
+      invoke<ChatDispatchResult>('chat:dispatch', input),
+    runs: (teamId?: string) => invoke<ChatRun[]>('chat:runs', teamId),
+    cancel: (runId: string) => invoke<boolean>('chat:cancel', runId)
   },
   providers: {
     list: () => invoke<ProviderView[]>('providers:list'),

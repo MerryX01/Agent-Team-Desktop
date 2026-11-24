@@ -21,7 +21,9 @@ function describeUpdate(update: acp.SessionUpdate): EventDraft | undefined {
         ? { type: 'agent.message.delta', message: update.content.text }
         : { type: 'agent.message.delta', message: `[${update.content.type}]` }
     case 'agent_thought_chunk':
-      return { type: 'agent.message.delta', message: update.content.type === 'text' ? update.content.text : '[thought]' }
+      return update.content.type === 'text'
+        ? { type: 'agent.thought.delta', message: update.content.text }
+        : { type: 'agent.thought.delta', message: `[${update.content.type}]` }
     case 'tool_call':
       return { type: 'agent.tool.started', message: update.title || '工具调用', data: { toolCallId: update.toolCallId, status: update.status ?? 'pending' } }
     case 'tool_call_update':

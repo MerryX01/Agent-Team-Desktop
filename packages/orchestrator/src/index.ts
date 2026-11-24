@@ -10,6 +10,7 @@ import { buildMessageContext, notifyDependencyResolved, sendMessage } from './me
 import { buildReviewPrompt, requestReview, resolveReview, resolveReviewFlow, startReview } from './review'
 import { createWorktree, removeWorktree } from './worktree'
 import { recordUsage } from './usage'
+import { ChatDispatcher, type ChatDispatchOptions, type ChatDispatchResult } from './chat'
 
 export * from './worktree'
 export * from './templates'
@@ -19,6 +20,8 @@ export * from './briefing'
 export * from './actionMode'
 export * from './review'
 export * from './messaging'
+export * from './health'
+export * from './chat'
 
 export interface RunOptions {
   teamId: string
@@ -76,8 +79,18 @@ export class Orchestrator {
   private readonly pendingApprovals = new Map<string, (decision: ApprovalDecision) => void>()
   private readonly cancelledRuns = new Set<string>()
   private readonly activeSessions = new Map<string, Set<string>>()
+  private readonly chat: ChatDispatcher
 
-  constructor(private readonly store: SqliteStore, private readonly registry: AdapterRegistry) {}
+  constructor(private readonly store: SqliteStore, private readonly registry: AdapterRegistry) {
+    this.chat = new ChatDispatcher(store, registry, {
+      emit: (draft, runId, taskId) => this.emit(draft, runId, taskId)
+    })
+  }
+
+  /** 群聊协同：真实调用多个 Agent、实时外发思考/工具/正文，并按交付门禁给出结论。 */
+  dispatchChat(options: ChatDispatchOptions): Promise<ChatDispatchResult> {
+    return this.chat.dispatch(options)
+  }
 
   onEvent(listener: Listener): () => void {
     this.listeners.add(listener)
@@ -128,6 +141,7 @@ export class Orchestrator {
 
   cancelRun(runId: string): boolean {
     this.cancelledRuns.add(runId)
+    this.chat.cancel(runId)
     const sessions = this.activeSessions.get(runId)
     if (sessions) {
       for (const sessionId of sessions) void this.registry.cancel(sessionId)

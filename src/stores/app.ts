@@ -1,7 +1,21 @@
 import { defineStore } from 'pinia'
 import { api } from '../api'
-import type { AgentDefinition, AgentEvent, ApiProvider, Approval, CustomAdapter, FileChange, MemoryEntry, ReviewCycle, Team, TeamMember, Task, Template, UsageRecord, AgentMessage } from '@shared/index'
+import type { AgentDefinition, AgentEvent, AgentProbeResult, ApiProvider, Approval, ChatRun, CustomAdapter, FileChange, MemoryEntry, ReviewCycle, Team, TeamMember, Task, Template, UsageRecord, AgentMessage } from '@shared/index'
 import { newId, nowIso } from '@shared/index'
+
+export interface LiveChatAgent {
+  messageId: string
+  agentId: string
+  name: string
+  role: string
+  phase: 'connecting' | 'replying' | 'synthesis' | 'completed' | 'failed'
+  output: string
+  thought: string
+  tools: Array<{ name: string; status: string }>
+  startedAt: number
+  synthesis?: boolean
+  error?: string
+}
 
 export const useAppStore = defineStore('app', {
   state: () => ({
@@ -23,13 +37,23 @@ export const useAppStore = defineStore('app', {
     currentTeamId: 'team-default',
     currentRunId: '',
     busy: false,
-    notice: ''
+    notice: '',
+    chatRun: null as ChatRun | null,
+    chatLive: {} as Record<string, LiveChatAgent>,
+    probes: [] as AgentProbeResult[],
+    probing: false,
+    dispatching: false,
+    activeChatRunId: ''
   }),
   getters: {
     currentTeam(state) { return state.teams.find((team) => team.id === state.currentTeamId) ?? state.teams[0] },
     teamTasks(state) { return state.tasks.filter((task) => task.teamId === state.currentTeamId) },
     agentById: (state) => (id?: string) => state.agents.find((agent) => agent.id === id),
-    pendingApprovals(state) { return state.approvals.filter((item) => item.status === 'pending') }
+    pendingApprovals(state) { return state.approvals.filter((item) => item.status === 'pending') },
+    chatLiveList(state) {
+      return Object.values(state.chatLive).sort((a, b) => a.startedAt - b.startedAt)
+    },
+    readyAgents(state) { return state.agents.filter((agent) => agent.enabled && agent.health === 'ready') }
   },
   actions: {
     async refresh() {
@@ -48,6 +72,7 @@ export const useAppStore = defineStore('app', {
         this.currentTeamId = this.teams[0].id
       }
       this.members = await api.teams.members(this.currentTeamId)
+      await this.loadChatRuns()
     },
     subscribeEvents() {
       return api.events.on((event) => {
@@ -55,7 +80,114 @@ export const useAppStore = defineStore('app', {
         if (event.type === 'agent.permission.required') void this.loadApprovals()
         if (event.type.startsWith('review.')) void this.loadReviews()
         if (event.type === 'message.sent') void this.loadMessages()
+        this.applyChatEvent(event)
       })
+    },
+    applyChatEvent(event: AgentEvent) {
+      const data = event.data as Record<string, unknown>
+      if (event.type === 'probe.completed') {
+        const result = data.result as AgentProbeResult | undefined
+        if (result) {
+          this.probes = [...this.probes.filter((item) => item.agentId !== result.agentId), result]
+          const agent = this.agents.find((item) => item.id === result.agentId)
+          if (agent) {
+            agent.health = result.state
+            agent.healthDetail = result.detail
+            agent.latencyMs = result.latencyMs
+            agent.lastProbeAt = result.checkedAt
+          }
+        }
+        return
+      }
+      if (event.type === 'chat.dispatch.started') {
+        const participants = (data.participants as ChatRun['participants']) ?? []
+        this.chatLive = {}
+        this.activeChatRunId = String(data.runId ?? '')
+        this.chatRun = {
+          id: String(data.chatRunId ?? ''), runId: String(data.runId ?? ''),
+          teamId: this.currentTeamId, content: String(data.content ?? ''),
+          status: 'running', participants, deliverable: '',
+          deliverableAgentId: undefined, deliverableMessageId: undefined,
+          gate: { passed: false, reasons: [], checks: [] },
+          durationMs: 0, createdAt: nowIso()
+        }
+        return
+      }
+      if (event.type === 'chat.agent.started') {
+        const messageId = String(data.messageId ?? '')
+        if (!messageId) return
+        this.chatLive = {
+          ...this.chatLive,
+          [messageId]: {
+            messageId, agentId: String(data.agentId ?? ''), name: String(data.name ?? ''),
+            role: String(data.role ?? ''), phase: (data.phase as LiveChatAgent['phase']) ?? 'connecting',
+            output: '', thought: '', tools: [], startedAt: Date.now(),
+            synthesis: Boolean(data.synthesis)
+          }
+        }
+        return
+      }
+      if (event.type === 'chat.agent.delta' || event.type === 'chat.agent.thought' || event.type === 'chat.agent.tool') {
+        const messageId = String(data.messageId ?? '')
+        const live = this.chatLive[messageId]
+        if (!live) return
+        if (event.type === 'chat.agent.delta') {
+          live.output += String(data.delta ?? '')
+          live.phase = live.synthesis ? 'synthesis' : 'replying'
+        } else if (event.type === 'chat.agent.thought') {
+          live.thought += String(data.delta ?? '')
+        } else {
+          const tool = { name: String(data.tool ?? event.message), status: String(data.status ?? 'running') }
+          const existing = live.tools.findIndex((item) => item.name === tool.name && item.status === 'running')
+          if (tool.status === 'done' && existing >= 0) live.tools[existing] = tool
+          else live.tools.push(tool)
+        }
+        this.chatLive = { ...this.chatLive }
+        return
+      }
+      if (event.type === 'chat.agent.completed') {
+        const messageId = String(data.messageId ?? '')
+        const live = this.chatLive[messageId]
+        if (live) {
+          live.phase = 'completed'
+          if (data.reply) live.output = String(data.reply)
+          this.chatLive = { ...this.chatLive }
+        }
+        void this.loadMessages()
+        return
+      }
+      if (event.type === 'chat.agent.failed') {
+        const messageId = String(data.messageId ?? '')
+        const live = this.chatLive[messageId]
+        if (live) {
+          live.phase = 'failed'
+          live.error = String(data.error ?? event.message)
+          this.chatLive = { ...this.chatLive }
+        }
+        return
+      }
+      if (event.type === 'chat.dispatch.completed') {
+        const result = data.result as {
+          runId: string; chatRunId: string; status: ChatRun['status']; participants: ChatRun['participants']
+          deliverable: string; deliverableAgentId?: string; gate: ChatRun['gate']; durationMs: number
+        } | undefined
+        if (result) {
+          this.chatRun = {
+            id: result.chatRunId, runId: result.runId, teamId: this.currentTeamId,
+            content: this.chatRun?.content ?? '', status: result.status,
+            participants: result.participants, deliverable: result.deliverable,
+            deliverableAgentId: result.deliverableAgentId,
+            deliverableMessageId: undefined, gate: result.gate,
+            durationMs: result.durationMs, createdAt: this.chatRun?.createdAt ?? nowIso(), completedAt: nowIso()
+          }
+          this.notice = result.gate.passed
+            ? `本轮协同完成，已交付（${Math.round(result.durationMs / 1000)}s）`
+            : `本轮未完成，禁止交付：${result.gate.reasons.join('；')}`
+        }
+        this.dispatching = false
+        this.activeChatRunId = ''
+        void Promise.all([this.loadMessages(), this.loadChatRuns(), this.refresh()])
+      }
     },
     async loadAuxiliary() {
       this.templates = await api.templates.list()
@@ -171,6 +303,66 @@ export const useAppStore = defineStore('app', {
     },
     async loadMessages() { this.messages = await api.messages.list(this.currentTeamId) },
     async loadReviews() { this.reviews = await api.reviews.list() },
+    async loadChatRuns() {
+      const runs = await api.chat.runs(this.currentTeamId)
+      if (!this.dispatching) this.chatRun = runs[0] ?? null
+    },
+    async dispatchChat(content: string, targetAgentId?: string) {
+      if (!this.currentTeam || this.dispatching) return
+      this.dispatching = true
+      this.chatLive = {}
+      this.notice = ''
+      try {
+        const result = await api.chat.dispatch({
+          teamId: this.currentTeam.id,
+          content,
+          targetAgentId,
+          cwd: this.currentTeam.defaultWorkspace || String(this.settings.defaultWorkspace ?? '') || undefined
+        })
+        this.chatRun = {
+          id: result.chatRunId, runId: result.runId, teamId: this.currentTeam.id, content,
+          status: result.status, participants: result.participants,
+          deliverable: result.deliverable, deliverableAgentId: result.deliverableAgentId,
+          gate: result.gate, durationMs: result.durationMs, createdAt: nowIso(), completedAt: nowIso()
+        }
+        if (!result.gate.passed && !this.notice) {
+          this.notice = `本轮未完成，禁止交付：${result.gate.reasons.join('；')}`
+        }
+        await Promise.all([this.loadMessages(), this.loadChatRuns(), this.refresh()])
+        return result
+      } catch (error) {
+        this.notice = error instanceof Error ? error.message : String(error)
+        throw error
+      } finally {
+        this.dispatching = false
+      }
+    },
+    async cancelChat() {
+      if (!this.activeChatRunId) return
+      await api.chat.cancel(this.activeChatRunId)
+      this.notice = '已发送取消请求'
+    },
+    async probeAll() {
+      if (this.probing) return
+      this.probing = true
+      try {
+        const results = await api.agents.probeAll(this.currentTeamId)
+        this.probes = results
+        await this.refresh()
+        const ready = results.filter((item) => item.state === 'ready').length
+        const skipped = results.filter((item) => item.state !== 'ready').length
+        this.notice = `体检完成：${ready} 个可用，${skipped} 个跳过（无额度/未登录/未安装等，详见列表）`
+        return results
+      } finally {
+        this.probing = false
+      }
+    },
+    async probeAgent(agentId: string) {
+      const result = await api.agents.probe(agentId, this.currentTeamId)
+      this.probes = [...this.probes.filter((item) => item.agentId !== agentId), result]
+      await this.refresh()
+      return result
+    },
     async sendMessage(input: Omit<AgentMessage, 'id' | 'createdAt'>) {
       await api.messages.send(input)
       await this.loadMessages()

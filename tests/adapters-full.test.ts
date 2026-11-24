@@ -65,8 +65,8 @@ describe('NativeProcessAdapter', () => {
     expect(text).toContain('ECHO:hello')
     expect(text).toContain(':DONE')
     expect(text).toContain('plain-text-line')
-    expect(text).toContain('STDERR-DELTA')
-    expect(events.filter((event) => event.type === 'agent.message.delta').length).toBeGreaterThanOrEqual(5)
+    expect(events.some((event) => event.message?.includes('STDERR-DELTA'))).toBe(true)
+    expect(events.filter((event) => event.type === 'agent.message.delta').length).toBeGreaterThanOrEqual(4)
     await adapter.disconnect(session)
   })
 

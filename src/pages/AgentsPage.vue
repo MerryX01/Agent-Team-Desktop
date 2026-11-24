@@ -78,7 +78,7 @@ async function addCustomAgent() {
   const agent: AgentDefinition = {
     id: newId('agent'), name: adapter.name, kind: 'native-process', vendor: 'Custom CLI',
     command: adapter.command, args: [...adapter.args], env: { ...adapter.env },
-    headlessArgs: [...adapter.args], headlessFallback: true, usageSupported: false, workflow: '', isLead: false, enabled: true, authMode: 'native-login', role: 'developer',
+    headlessArgs: [...adapter.args], headlessFallback: true, usageSupported: false, workflow: '', isLead: false, health: 'unknown', enabled: true, authMode: 'native-login', role: 'developer',
     installed: false, note: adapter.note ?? '自定义 CLI Adapter', customAdapterRef: adapter.id
   }
   await store.saveAgent(agent)
@@ -108,7 +108,7 @@ async function removeAgent(agent: AgentDefinition) {
 async function addApiAgent() {
   const agent: AgentDefinition = {
     id: newId('agent'), name: '新 API 模型成员', kind: 'api-provider', vendor: 'Custom',
-    command: '', args: [], env: {}, headlessArgs: [], headlessFallback: false, usageSupported: false, workflow: '', isLead: false,
+    command: '', args: [], env: {}, headlessArgs: [], headlessFallback: false, usageSupported: false, workflow: '', isLead: false, health: 'unknown',
     enabled: true, authMode: 'api-key', role: 'developer',
     installed: true, note: '使用 API Key 通道，费用自行承担', providerRef: store.providers[0]?.id
   }

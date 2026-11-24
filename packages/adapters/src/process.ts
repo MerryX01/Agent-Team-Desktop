@@ -1,9 +1,13 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { existsSync, statSync } from 'node:fs'
 import type { Readable } from 'node:stream'
-import type { AgentDefinition } from '@shared/index'
-import { modelById, newId, nowIso } from '@shared/index'
-import { buildCmdLine, detectAgent } from './detect'
+import type { AgentDefinition, ModelTool } from '@shared/index'
+import { modelById, modelToolForAgent, newId, nowIso } from '@shared/index'
+
+/** 仅这些工具的官方 headless 命令公开支持 --model；其余工具选择模型仅作配置记录，不注入运行时参数。 */
+const TOOLS_WITH_MODEL_FLAG: ReadonlySet<ModelTool> = new Set<ModelTool>(['claude-code', 'codex', 'doubao'])
+import { buildCmdLine, detectAgent, augmentEnv, resolveWorkBuddyCliPath } from './detect'
+import { classifyAgentFailure } from './probe'
 import type { AgentAdapter, AgentSession, ConnectOptions, EventDraft, EventSink } from './types'
 import { AdapterError } from './types'
 
@@ -27,7 +31,7 @@ interface LiveProcessSession extends AgentSession {
 const sessions = new Map<string, LiveProcessSession>()
 
 function spawnProcess(command: string, args: string[], cwd: string, env: Record<string, string>): ChildProcessWithoutNullStreams {
-  const fullEnv = { ...process.env, ...env }
+  const fullEnv = augmentEnv({ ...process.env, ...env })
   if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(command)) {
     // 仅对 .cmd/.bat 使用 cmd.exe；参数逐个引用后原样传递，不拼接用户字符串。
     const cmdLine = buildCmdLine(command, args)
@@ -41,6 +45,14 @@ function spawnProcess(command: string, args: string[], cwd: string, env: Record<
 
 function useHeadless(definition: AgentDefinition): boolean {
   return Boolean(definition.headlessCommand) || (definition.headlessArgs?.length ?? 0) > 0
+}
+
+/** commandPath 只在它确实是同一个命令时才能替换原始命令，避免把 ACP 入口当成无头命令。 */
+function sameCommand(commandPath: string | undefined, command: string | undefined): boolean {
+  if (!commandPath || !command) return false
+  const base = commandPath.split(/[\\/]/).pop() ?? ''
+  const target = command.split(/[\\/]/).pop() ?? ''
+  return base.toLowerCase().replace(/\.(cmd|bat|exe)$/i, '') === target.toLowerCase().replace(/\.(cmd|bat|exe)$/i, '')
 }
 
 function lineReader(stream: Readable, onLine: (line: string) => void): Promise<void> {
@@ -118,15 +130,23 @@ export class NativeProcessAdapter implements AgentAdapter {
   }
 
   async connect(definition: AgentDefinition, cwd: string, options: ConnectOptions): Promise<AgentSession> {
-    const command = definition.headlessCommand || definition.command
+    const configured = definition.headlessCommand || definition.command
+    const command = sameCommand(definition.commandPath, configured) && definition.commandPath && existsSync(definition.commandPath)
+      ? definition.commandPath
+      : configured
     if (!command) throw new AdapterError('未配置无头命令（headlessCommand/command）', 'connect')
     if (!cwd || !existsSync(cwd) || !statSync(cwd).isDirectory()) {
       throw new AdapterError(`工作目录不存在或不是目录: ${cwd}`, 'connect')
     }
     const baseArgs = [...((useHeadless(definition) ? definition.headlessArgs : definition.args) ?? [])]
-    // Claude Code / Codex 官方 headless 支持 --model；仅在未显式给出时按模型映射追加。
+    // 仅 Claude Code / Codex / 豆包 CLI 官方 headless 支持 --model；其余工具选择模型仅作配置记录。
+    // 自定义/API Agent 没有内置工具映射，若显式选择受支持工具的模型则仍按其工具处理。
     const selectedModel = modelById(definition.modelRef)
-    if (selectedModel && !baseArgs.includes('--model')) {
+    const agentTool = modelToolForAgent(definition.id)
+    const toolAllowsFlag = selectedModel
+      ? (agentTool ? TOOLS_WITH_MODEL_FLAG.has(agentTool) : TOOLS_WITH_MODEL_FLAG.has(selectedModel.tool))
+      : false
+    if (selectedModel && toolAllowsFlag && !baseArgs.includes('--model')) {
       baseArgs.push('--model', selectedModel.modelId)
     }
     const session: LiveProcessSession = {
@@ -134,7 +154,7 @@ export class NativeProcessAdapter implements AgentAdapter {
       startedAt: nowIso(), command, baseArgs: [...baseArgs],
       promptFlag: this.options.promptFlag ?? '',
       env: { ...(definition.env ?? {}) },
-      timeoutMs: options.timeoutMs ?? this.options.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS,
+      timeoutMs: options.sendTimeoutMs ?? options.timeoutMs ?? this.options.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS,
       onEvent: options.onEvent, cancelled: false
     }
     sessions.set(session.id, session)
@@ -153,6 +173,11 @@ export class NativeProcessAdapter implements AgentAdapter {
     live.status = 'busy'
 
     const args = [...live.baseArgs]
+    if (live.agentId === 'agent-workbuddy') {
+      const script = resolveWorkBuddyCliPath()
+      if (!script) throw new AdapterError('未找到 WorkBuddy 内置 codebuddy CLI', 'connect')
+      args.unshift(script)
+    }
     if (live.promptFlag) args.push(live.promptFlag)
     args.push(prompt) // prompt 必须是最后一个参数
     const child = spawnProcess(live.command, args, live.cwd, live.env)
@@ -168,6 +193,7 @@ export class NativeProcessAdapter implements AgentAdapter {
 
     let output = ''
     let stderrTail = ''
+    let earlyError = ''
     const onOutputLine = (line: string) => {
       const text = parseLine(line)
       if (!text) return
@@ -175,11 +201,14 @@ export class NativeProcessAdapter implements AgentAdapter {
       emit({ type: 'agent.message.delta', message: text })
     }
     const onErrorLine = (line: string) => {
-      stderrTail = `${stderrTail}\n${line}`.slice(-500)
-      const text = parseLine(line)
-      if (text) {
-        output += text
-        emit({ type: 'agent.message.delta', message: text, data: { stream: 'stderr' } })
+      stderrTail = `${stderrTail}\n${line}`.slice(-1200)
+      // stderr 只作为诊断信息，绝不拼进 Agent 回复，否则警告/报错会被误当成答案。
+      emit({ type: 'system', message: `[stderr] ${line.slice(0, 500)}`, data: { stream: 'stderr' } })
+      // 额度/登录类硬错误会触发 CLI 长时间重试；识别到就立即终止，避免群聊白等几分钟。
+      const kind = classifyAgentFailure(line)
+      if (!earlyError && (kind === 'no-quota' || kind === 'login-required')) {
+        earlyError = line.trim()
+        if (!child.killed) child.kill()
       }
     }
 
@@ -202,8 +231,11 @@ export class NativeProcessAdapter implements AgentAdapter {
         timeout
       ])
       if (outcome.error) throw new AdapterError(`无法启动命令 ${live.command}: ${outcome.error.message}`, 'send')
-      if (!live.cancelled && outcome.code !== 0 && !output) {
-        throw new AdapterError(`命令退出码 ${outcome.code}: ${stderrTail || '无输出'}`, 'send')
+      if (earlyError) throw new AdapterError(`Agent 拒绝应答: ${earlyError.slice(0, 800)}`, 'send')
+      if (!live.cancelled && outcome.code !== 0) {
+        // 部分 CLI 失败时仍会输出半截内容；保留在 error 里供排查，但绝不当作成功回复。
+        const detail = stderrTail.trim() || output.trim() || '无输出'
+        throw new AdapterError(`命令退出码 ${outcome.code}: ${detail.slice(0, 1200)}`, 'send')
       }
       live.status = live.cancelled ? 'closed' : 'online'
       return output

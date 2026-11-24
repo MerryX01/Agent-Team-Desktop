@@ -21,6 +21,8 @@ export interface ConnectOptions {
   onEvent: EventSink
   requestApproval?: (request: ApprovalRequest) => Promise<ApprovalDecision>
   timeoutMs?: number
+  /** 单次 prompt 的最长等待时间；群聊/体检可分别设置，避免默认超时误杀长任务。 */
+  sendTimeoutMs?: number
   permissionMode?: 'ask' | 'auto-deny' | 'plan'
   taskId?: string
   runId?: string
